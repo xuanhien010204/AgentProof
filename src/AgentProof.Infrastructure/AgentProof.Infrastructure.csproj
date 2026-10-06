@@ -1,8 +1,12 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\AgentProof.Application\AgentProof.Application.csproj" />
     <ProjectReference Include="..\AgentProof.Domain\AgentProof.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AgentProof.UnitTests" />
   </ItemGroup>
 
   <PropertyGroup>

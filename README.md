@@ -53,6 +53,12 @@ dotnet run --project src/AgentProof.Cli -- plan . --task-context task.json
 dotnet run --project src/AgentProof.Cli -- verify . --task-context task.json
 ```
 
+Exit codes:
+- `0`: `Verified` (or successful command execution for analyze/recommend/plan)
+- `1`: CLI, input, or runtime error
+- `2`: `NotVerified` (a required verification check failed)
+- `3`: `PartiallyVerified` (checks passed, but explicit verification gaps remain)
+
 Example task files are available in [`docs/examples`](docs/examples). A task context looks like:
 
 ```json

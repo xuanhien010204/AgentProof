@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using AgentProof.Domain;
 using AgentProof.Infrastructure;
 
@@ -35,6 +36,67 @@ public sealed class VerificationRunnerTests
     }
 
     [Fact]
+    public async Task TimeoutKillsVerificationProcess()
+    {
+        using var repo = MinimalProject(valid: true);
+        int capturedPid = 0;
+        var runner = new SafeVerificationRunner
+        {
+            ProcessStartedForTesting = p => capturedPid = p.Id
+        };
+        var step = new VerificationStep("build", "Build", ".NET",
+            new VerificationCommand("dotnet", ["build", "Test.csproj"]), repo.Root, TimeSpan.Zero, true);
+
+        var result = await runner.RunAsync(repo.Root, new VerificationPlan([step], []));
+
+        Assert.Equal(VerificationStatus.NotVerified, result.Status);
+        Assert.Equal(VerificationStepStatus.TimedOut, Assert.Single(result.Evidence).Status);
+        Assert.True(capturedPid > 0);
+        Assert.True(IsProcessTerminated(capturedPid));
+    }
+
+    [Fact]
+    public async Task CancellationKillsVerificationProcess()
+    {
+        using var repo = MinimalProject(valid: true);
+        int capturedPid = 0;
+        using var cts = new CancellationTokenSource();
+        var runner = new SafeVerificationRunner
+        {
+            ProcessStartedForTesting = p =>
+            {
+                capturedPid = p.Id;
+                cts.Cancel();
+            }
+        };
+        var step = new VerificationStep("build", "Build", ".NET",
+            new VerificationCommand("dotnet", ["build", "Test.csproj"]), repo.Root, TimeSpan.FromMinutes(1), true);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => runner.RunAsync(repo.Root, new VerificationPlan([step], []), cts.Token));
+
+        Assert.True(capturedPid > 0);
+        Assert.True(IsProcessTerminated(capturedPid));
+    }
+
+    private static bool IsProcessTerminated(int pid)
+    {
+        try
+        {
+            using var proc = Process.GetProcessById(pid);
+            return proc.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+    }
+
+    [Fact]
     public async Task ArbitraryShellCommandIsRejected()
     {
         using var repo = MinimalProject(valid: true);
@@ -43,6 +105,85 @@ public sealed class VerificationRunnerTests
         var result = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([step], []));
         Assert.Equal(VerificationStatus.NotVerified, result.Status);
         Assert.Contains("allowlist", Assert.Single(result.Evidence).FailureReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("cmd.exe", "/c", "dir")]
+    [InlineData("bash", "-c", "ls")]
+    [InlineData("sh", "-c", "ls")]
+    [InlineData("dotnet", "run", "malicious")]
+    [InlineData("npm", "run", "arbitrary_script")]
+    [InlineData("npx", "malicious_package", "test")]
+    public async Task ArbitraryCommandsRemainRejected(string executable, params string[] args)
+    {
+        using var repo = MinimalProject(valid: true);
+        var step = new VerificationStep("bad", "Bad", "Test",
+            new VerificationCommand(executable, args), repo.Root, TimeSpan.FromSeconds(1), true);
+        var result = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([step], []));
+        Assert.Equal(VerificationStatus.NotVerified, result.Status);
+        Assert.Contains("allowlist", Assert.Single(result.Evidence).FailureReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task VerificationTargetCannotEscapeRepositoryRoot()
+    {
+        using var repo = MinimalProject(valid: true);
+        var stepRelative = new VerificationStep("escape-rel", "Escape", ".NET",
+            new VerificationCommand("dotnet", ["build", "../Escape.csproj"]), repo.Root, TimeSpan.FromSeconds(5), true);
+        var resultRelative = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([stepRelative], []));
+        Assert.Equal(VerificationStatus.NotVerified, resultRelative.Status);
+        Assert.Contains("escapes the repository root", Assert.Single(resultRelative.Evidence).FailureReason, StringComparison.OrdinalIgnoreCase);
+
+        var stepRooted = new VerificationStep("escape-root", "Escape", ".NET",
+            new VerificationCommand("dotnet", ["build", Path.Combine(Path.GetTempPath(), "Escape.csproj")]), repo.Root, TimeSpan.FromSeconds(5), true);
+        var resultRooted = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([stepRooted], []));
+        Assert.Equal(VerificationStatus.NotVerified, resultRooted.Status);
+        Assert.Contains("approved solution or project path", Assert.Single(resultRooted.Evidence).FailureReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task WorkingDirectoryCannotEscapeRepositoryRoot()
+    {
+        using var repo = MinimalProject(valid: true);
+        var outsideDirectory = Path.GetTempPath();
+        var step = new VerificationStep("outside-cwd", "Outside", ".NET",
+            new VerificationCommand("dotnet", ["build", "Test.csproj"]), outsideDirectory, TimeSpan.FromSeconds(5), true);
+        var result = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([step], []));
+        Assert.Equal(VerificationStatus.NotVerified, result.Status);
+        Assert.Contains("must be inside the repository root", Assert.Single(result.Evidence).FailureReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("password: super_secret_123", "password=[REDACTED]")]
+    [InlineData("password = my_password!", "password=[REDACTED]")]
+    [InlineData("api_key: ak_test_48192849", "api_key=[REDACTED]")]
+    [InlineData("api-key=secret_token_val", "api-key=[REDACTED]")]
+    [InlineData("TOKEN : eyJhbGciOiJIUzI1NiIsInR5cCI6", "TOKEN=[REDACTED]")]
+    [InlineData("secret: my_classified_info", "secret=[REDACTED]")]
+    public void SecretLikeOutputIsRedactedInSummarize(string raw, string expected)
+    {
+        var summarized = SafeVerificationRunner.Summarize(raw, string.Empty);
+        Assert.Equal(expected, summarized);
+        Assert.DoesNotContain("secret_", summarized);
+        Assert.DoesNotContain("eyJhbGci", summarized);
+    }
+
+    [Fact]
+    public async Task SecretLikeOutputIsRedactedFromBuildOutput()
+    {
+        using var repo = new TemporaryRepository();
+        repo.Write("Test.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <Target Name="PrintSecret" BeforeTargets="Build">
+                <Message Importance="High" Text="api_key: live_secret_12345" />
+              </Target>
+            </Project>
+            """);
+        var result = await RunBuildAsync(repo.Root, TimeSpan.FromMinutes(1));
+        var evidence = Assert.Single(result.Evidence);
+        Assert.DoesNotContain("live_secret_12345", evidence.OutputSummary);
+        Assert.Contains("api_key=[REDACTED]", evidence.OutputSummary);
     }
 
     private static TemporaryRepository MinimalProject(bool valid)

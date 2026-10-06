@@ -39,9 +39,12 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
         return new VerificationResult(status, evidence, gaps);
     }
 
-    private static async Task<VerificationEvidence> ExecuteAsync(
+    internal Action<Process>? ProcessStartedForTesting { get; init; }
+
+    private async Task<VerificationEvidence> ExecuteAsync(
         string root, VerificationStep step, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var stopwatch = Stopwatch.StartNew();
         try
         {
@@ -60,29 +63,46 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
 
             using var process = new Process { StartInfo = startInfo };
             if (!process.Start()) throw new InvalidOperationException("The verification process could not be started.");
-            var stdout = CaptureAsync(process.StandardOutput);
-            var stderr = CaptureAsync(process.StandardError);
-            using var timeout = new CancellationTokenSource(step.Timeout);
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+
             try
             {
-                await process.WaitForExitAsync(linked.Token);
+                ProcessStartedForTesting?.Invoke(process);
+                var stdout = CaptureAsync(process.StandardOutput);
+                var stderr = CaptureAsync(process.StandardError);
+                using var timeout = new CancellationTokenSource(step.Timeout);
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+                try
+                {
+                    await process.WaitForExitAsync(linked.Token);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    TryKill(process);
+                    await process.WaitForExitAsync(CancellationToken.None);
+                    throw;
+                }
+                catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+                {
+                    TryKill(process);
+                    await process.WaitForExitAsync(CancellationToken.None);
+                    var timedOutOutput = Summarize(await stdout, await stderr);
+                    return new VerificationEvidence(step, VerificationStepStatus.TimedOut, null, stopwatch.Elapsed,
+                        timedOutOutput, $"Command exceeded timeout of {step.Timeout}.");
+                }
+
+                var output = Summarize(await stdout, await stderr);
+                var passed = process.ExitCode == 0;
+                return new VerificationEvidence(step,
+                    passed ? VerificationStepStatus.Passed : VerificationStepStatus.Failed,
+                    process.ExitCode, stopwatch.Elapsed, output,
+                    passed ? null : $"Process exited with code {process.ExitCode}.");
             }
-            catch (OperationCanceledException) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 TryKill(process);
                 await process.WaitForExitAsync(CancellationToken.None);
-                var timedOutOutput = Summarize(await stdout, await stderr);
-                return new VerificationEvidence(step, VerificationStepStatus.TimedOut, null, stopwatch.Elapsed,
-                    timedOutOutput, $"Command exceeded timeout of {step.Timeout}.");
+                throw;
             }
-
-            var output = Summarize(await stdout, await stderr);
-            var passed = process.ExitCode == 0;
-            return new VerificationEvidence(step,
-                passed ? VerificationStepStatus.Passed : VerificationStepStatus.Failed,
-                process.ExitCode, stopwatch.Elapsed, output,
-                passed ? null : $"Process exited with code {process.ExitCode}.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
@@ -146,7 +166,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
         return builder.ToString();
     }
 
-    private static string Summarize(string stdout, string stderr)
+    internal static string Summarize(string stdout, string stderr)
     {
         var combined = string.IsNullOrWhiteSpace(stderr) ? stdout : $"{stdout}\n{stderr}";
         return SecretPattern().Replace(combined.Trim(), "$1=[REDACTED]");
@@ -155,7 +175,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
     private static void TryKill(Process process)
     {
         try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
-        catch (InvalidOperationException) { }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
     }
 
     [GeneratedRegex("(?i)(password|api[_-]?key|token|secret)\\s*[:=]\\s*\\S+")]

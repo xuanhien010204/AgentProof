@@ -18,7 +18,7 @@ AgentProof V0.1 runs locally. It does not upload repository source, call an LLM 
 - The runner accepts only generated `dotnet restore/build/test`, known package scripts, and an installed Playwright test command.
 - Solution and project targets and working directories must remain inside the repository root.
 - Each process has a timeout and supports cancellation.
-- The process tree is terminated on timeout.
+- The process tree is terminated on timeout or caller cancellation before propagating cancellation.
 - stdout and stderr are captured with a 64 KiB-per-stream limit.
 - Common secret assignments are redacted from returned output, and environment variables are never enumerated or logged.
 
