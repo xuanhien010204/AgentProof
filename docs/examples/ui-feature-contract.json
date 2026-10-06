@@ -1,0 +1,26 @@
+{
+  "hasUiChanges": true,
+  "hasBrowserVisibleChanges": true,
+  "contract": {
+    "goal": "Add responsive navigation header with dark mode toggle",
+    "constraints": [
+      "Must support desktop and mobile viewport widths"
+    ],
+    "nonGoals": [
+      "User authentication integration"
+    ],
+    "acceptanceCriteria": [
+      {
+        "id": "AC-1",
+        "description": "Navigation links are visible and interactive in browser",
+        "requiredEvidence": [
+          "Browser"
+        ]
+      }
+    ],
+    "requiredEvidence": [
+      "Build",
+      "Browser"
+    ]
+  }
+}

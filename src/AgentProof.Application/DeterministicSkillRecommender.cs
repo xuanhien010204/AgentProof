@@ -17,6 +17,11 @@ public sealed class DeterministicSkillRecommender : ISkillRecommender
         var azure = task.HasDeploymentChanges &&
             task.DeploymentTarget?.Contains("azure", StringComparison.OrdinalIgnoreCase) == true;
 
+        var contract = task.GetEffectiveContract();
+        var browserRequired = task.HasBrowserVisibleChanges ||
+            contract.RequiredEvidence.Contains(EvidenceType.Browser) ||
+            contract.AcceptanceCriteria.Any(x => x.RequiredEvidence.Contains(EvidenceType.Browser));
+
         return
         [
             substantialUnderstanding
@@ -37,7 +42,7 @@ public sealed class DeterministicSkillRecommender : ISkillRecommender
             reactOrNext && frontend
                 ? Recommendation(SkillCatalog.VercelAgentSkills, RecommendationLevel.Recommended, "REACT_NEXT_FRONTEND_CHANGE", "The repository uses React or Next.js and the task changes frontend code.")
                 : Recommendation(SkillCatalog.VercelAgentSkills, RecommendationLevel.NotNeeded, "NO_REACT_NEXT_FRONTEND_CHANGE", "The task does not combine a React or Next.js repository with frontend changes."),
-            task.HasBrowserVisibleChanges
+            browserRequired
                 ? Recommendation(SkillCatalog.Playwright, RecommendationLevel.Required, "BROWSER_VISIBLE_CHANGE", "The task changes browser-visible behavior and requires runtime browser verification.")
                 : Recommendation(SkillCatalog.Playwright, RecommendationLevel.NotNeeded, "NO_BROWSER_VISIBLE_CHANGE", "No browser-visible behavior change was identified."),
             azure

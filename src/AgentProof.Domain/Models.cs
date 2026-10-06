@@ -31,6 +31,25 @@ public sealed record RepositoryProfile(
     bool HasGit,
     long EstimatedSize);
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum EvidenceType { Build, Tests, Runtime, Browser, Database, Performance }
+
+public sealed record AcceptanceCriterion
+{
+    public string Id { get; init; } = string.Empty;
+    public string Description { get; init; } = string.Empty;
+    public IReadOnlyList<EvidenceType> RequiredEvidence { get; init; } = [];
+}
+
+public sealed record TaskContract
+{
+    public string Goal { get; init; } = string.Empty;
+    public IReadOnlyList<string> Constraints { get; init; } = [];
+    public IReadOnlyList<string> NonGoals { get; init; } = [];
+    public IReadOnlyList<AcceptanceCriterion> AcceptanceCriteria { get; init; } = [];
+    public IReadOnlyList<EvidenceType> RequiredEvidence { get; init; } = [];
+}
+
 public sealed record TaskContext
 {
     public string Description { get; init; } = string.Empty;
@@ -43,6 +62,28 @@ public sealed record TaskContext
     public bool HasBrowserVisibleChanges { get; init; }
     public bool HasDeploymentChanges { get; init; }
     public string? DeploymentTarget { get; init; }
+    public TaskContract? Contract { get; init; }
+
+    public TaskContract GetEffectiveContract()
+    {
+        if (Contract is not null) return Contract;
+
+        var required = new List<EvidenceType>();
+        if (HasBrowserVisibleChanges) required.Add(EvidenceType.Browser);
+        if (HasDatabaseChanges) required.Add(EvidenceType.Database);
+        if (TaskType is TaskType.BugFix or TaskType.Feature or TaskType.Refactor or TaskType.Performance ||
+            AffectedAreas.Contains(AffectedArea.Backend))
+        {
+            required.Add(EvidenceType.Build);
+            required.Add(EvidenceType.Tests);
+        }
+
+        return new TaskContract
+        {
+            Goal = Description,
+            RequiredEvidence = required.Distinct().ToArray()
+        };
+    }
 }
 
 public sealed record SkillDefinition(string Id, string Name, string Purpose);
@@ -65,7 +106,11 @@ public sealed record VerificationStep(
     VerificationCommand Command,
     string WorkingDirectory,
     TimeSpan Timeout,
-    bool Required);
+    bool Required,
+    IReadOnlyList<EvidenceType>? ProvidedEvidence = null)
+{
+    public IReadOnlyList<EvidenceType> ProvidedEvidence { get; init; } = ProvidedEvidence ?? [];
+}
 
 public sealed record VerificationGap(string Code, string Reason);
 

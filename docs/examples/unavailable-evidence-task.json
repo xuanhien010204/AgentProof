@@ -1,0 +1,34 @@
+{
+  "hasDatabaseChanges": true,
+  "contract": {
+    "goal": "Apply user profile database migration and benchmark query throughput",
+    "constraints": [
+      "Migration must be backwards-compatible"
+    ],
+    "nonGoals": [
+      "Migrate legacy user records"
+    ],
+    "acceptanceCriteria": [
+      {
+        "id": "AC-1",
+        "description": "Database schema migration applies cleanly",
+        "requiredEvidence": [
+          "Database"
+        ]
+      },
+      {
+        "id": "AC-2",
+        "description": "Query performance remains under 50ms latency",
+        "requiredEvidence": [
+          "Performance"
+        ]
+      }
+    ],
+    "requiredEvidence": [
+      "Build",
+      "Tests",
+      "Database",
+      "Performance"
+    ]
+  }
+}

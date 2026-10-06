@@ -1,0 +1,25 @@
+{
+  "contract": {
+    "goal": "Fix null reference in repository analyzer",
+    "constraints": [
+      "Preserve existing method signature",
+      "Do not add external dependencies"
+    ],
+    "nonGoals": [
+      "Refactor file discovery traversal"
+    ],
+    "acceptanceCriteria": [
+      {
+        "id": "AC-1",
+        "description": "Analyzer handles null path without throwing NullReferenceException",
+        "requiredEvidence": [
+          "Tests"
+        ]
+      }
+    ],
+    "requiredEvidence": [
+      "Build",
+      "Tests"
+    ]
+  }
+}
