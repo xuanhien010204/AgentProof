@@ -1,0 +1,11 @@
+{
+  "description": "Add a new UI dashboard",
+  "taskType": "Feature",
+  "complexity": "Medium",
+  "affectedAreas": ["Frontend", "Ui"],
+  "hasUiChanges": true,
+  "hasDatabaseChanges": false,
+  "hasArchitectureChanges": false,
+  "hasBrowserVisibleChanges": true,
+  "hasDeploymentChanges": false
+}

@@ -1,0 +1,11 @@
+{
+  "description": "Fix null handling in repository analyzer",
+  "taskType": "BugFix",
+  "complexity": "Low",
+  "affectedAreas": ["Backend"],
+  "hasUiChanges": false,
+  "hasDatabaseChanges": false,
+  "hasArchitectureChanges": false,
+  "hasBrowserVisibleChanges": false,
+  "hasDeploymentChanges": false
+}

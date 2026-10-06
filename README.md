@@ -1,0 +1,98 @@
+# AgentProof
+
+AgentProof is a local-first engineering assurance layer for AI coding agents.
+
+AI agents such as Codex or Antigravity provide reasoning and implementation. AgentProof provides deterministic repository facts, engineering rules, skill recommendations, verification plans, executable verification, and evidence.
+
+```text
+Developer
+    ↓
+Codex / Antigravity
+    ↓ MCP
+AgentProof
+    ↓
+Local Repository
+```
+
+Code generation is not evidence of correctness. AgentProof reports `Verified` only when every required generated check succeeds and no verification gap remains.
+
+## V0.1 scope
+
+AgentProof V0.1 does not require an OpenAI API key, ChatGPT API, Claude API, Gemini API, or any external LLM API. The reasoning model comes from the MCP host agent. Repository analysis and verification run locally.
+
+The solution contains:
+
+- `AgentProof.Domain`: immutable domain concepts and verification evidence.
+- `AgentProof.Application`: use-case orchestration, skill rules, and verification planning.
+- `AgentProof.Infrastructure`: local repository inspection, project configuration reading, and safe process execution.
+- `AgentProof.Mcp`: the primary stdio MCP adapter.
+- `AgentProof.Cli`: a small development and debugging adapter.
+- Unit and integration test projects.
+
+See [architecture](docs/architecture.md), [MCP integration](docs/mcp-integration.md), and [security](docs/security.md) for details.
+
+## Requirements
+
+- .NET 10 SDK
+- Git is optional; its presence is reported during analysis
+
+## Build and test
+
+```shell
+dotnet restore AgentProof.sln
+dotnet build AgentProof.sln
+dotnet test AgentProof.sln
+```
+
+## CLI debugging
+
+```shell
+dotnet run --project src/AgentProof.Cli -- analyze .
+dotnet run --project src/AgentProof.Cli -- recommend . --task-context task.json
+dotnet run --project src/AgentProof.Cli -- plan . --task-context task.json
+dotnet run --project src/AgentProof.Cli -- verify . --task-context task.json
+```
+
+Example task files are available in [`docs/examples`](docs/examples). A task context looks like:
+
+```json
+{
+  "description": "Fix null handling in repository analyzer",
+  "taskType": "BugFix",
+  "complexity": "Low",
+  "affectedAreas": ["Backend"],
+  "hasUiChanges": false,
+  "hasDatabaseChanges": false,
+  "hasArchitectureChanges": false,
+  "hasBrowserVisibleChanges": false,
+  "hasDeploymentChanges": false
+}
+```
+
+## MCP server
+
+The server uses stdio and the official `ModelContextProtocol` 2.2.0 C# SDK.
+
+```shell
+dotnet run --project src/AgentProof.Mcp
+```
+
+It exposes four tools:
+
+- `analyze_repository`
+- `recommend_skills`
+- `create_verification_plan`
+- `verify`
+
+The server intentionally does not expose code generation, file editing, package installation, or arbitrary command execution.
+
+## Current limitations
+
+- Node.js verification scripts are read from a root-level `package.json`; workspace package discovery is not yet implemented.
+- Browser verification requires an existing Playwright installation and is reported as a gap otherwise.
+- Verification trusts the local repository being checked. Build and test systems can execute repository-defined hooks; see the security document.
+- V0.1 uses stdio only and has no persistence, UI, telemetry, or cloud service.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
