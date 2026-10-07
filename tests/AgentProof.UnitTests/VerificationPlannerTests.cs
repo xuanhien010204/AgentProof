@@ -55,6 +55,81 @@ public sealed class VerificationPlannerTests
     }
 
     [Fact]
+    public async Task ScopedBackendRequirementsExcludeRootAndOtherWorkspaces()
+    {
+        using var repo = new TemporaryRepository();
+        WriteNodeWorkspace(repo, ".");
+        WriteNodeWorkspace(repo, "backend");
+        WriteNodeWorkspace(repo, "frontend");
+
+        var plan = await PlanAsync(repo.Root, ScopedRequirementsTask((EvidenceType.Build, "backend"), (EvidenceType.Tests, "backend")));
+
+        Assert.NotEmpty(plan.Steps);
+        Assert.All(plan.Steps, step => Assert.Equal("backend", step.WorkspaceId));
+        Assert.DoesNotContain(plan.Steps, step => step.WorkspaceId is "." or "frontend");
+    }
+
+    [Fact]
+    public async Task ScopedFrontendRequirementsPlanFrontendOnly()
+    {
+        using var repo = new TemporaryRepository();
+        WriteNodeWorkspace(repo, ".");
+        WriteNodeWorkspace(repo, "backend");
+        WriteNodeWorkspace(repo, "frontend");
+
+        var plan = await PlanAsync(repo.Root, ScopedRequirementsTask((EvidenceType.Build, "frontend"), (EvidenceType.Tests, "frontend")));
+
+        Assert.NotEmpty(plan.Steps);
+        Assert.All(plan.Steps, step => Assert.Equal("frontend", step.WorkspaceId));
+    }
+
+    [Fact]
+    public async Task ScopedBackendAndFrontendRequirementsPlanExactlyThoseWorkspaces()
+    {
+        using var repo = new TemporaryRepository();
+        WriteNodeWorkspace(repo, ".");
+        WriteNodeWorkspace(repo, "backend");
+        WriteNodeWorkspace(repo, "frontend");
+
+        var plan = await PlanAsync(repo.Root, ScopedRequirementsTask(
+            (EvidenceType.Build, "backend"), (EvidenceType.Tests, "backend"),
+            (EvidenceType.Build, "frontend"), (EvidenceType.Tests, "frontend")));
+
+        Assert.Equal(["backend", "frontend"], plan.Steps.Select(step => step.WorkspaceId ?? string.Empty).Distinct().OrderBy(x => x, StringComparer.Ordinal).ToArray());
+        Assert.DoesNotContain(plan.Steps, step => step.WorkspaceId == ".");
+    }
+
+    [Fact]
+    public async Task UnscopedRequirementsPreserveRepositoryWideWorkspacePlanning()
+    {
+        using var repo = new TemporaryRepository();
+        WriteNodeWorkspace(repo, ".");
+        WriteNodeWorkspace(repo, "frontend");
+
+        var plan = await PlanAsync(repo.Root, new TaskContext
+        {
+            Contract = new TaskContract { RequiredEvidence = [EvidenceType.Build, EvidenceType.Tests] }
+        });
+
+        Assert.Contains(plan.Steps, step => step.WorkspaceId == ".");
+        Assert.Contains(plan.Steps, step => step.WorkspaceId == "frontend");
+    }
+
+    [Fact]
+    public async Task MixedScopedAndUnscopedRequirementsHaveDeterministicAllWorkspacePlanning()
+    {
+        using var repo = new TemporaryRepository();
+        WriteNodeWorkspace(repo, ".");
+        WriteNodeWorkspace(repo, "backend");
+        WriteNodeWorkspace(repo, "frontend");
+
+        var plan = await PlanAsync(repo.Root, ScopedRequirementsTask(
+            (EvidenceType.Build, "backend"), (EvidenceType.Tests, null)));
+
+        Assert.Equal([".", "backend", "frontend"], plan.Steps.Select(step => step.WorkspaceId ?? string.Empty).Distinct().OrderBy(x => x, StringComparer.Ordinal).ToArray());
+    }
+
+    [Fact]
     public async Task PlansBrowserVerificationFromPlaywrightWorkspace()
     {
         using var repo = new TemporaryRepository();
@@ -213,5 +288,24 @@ public sealed class VerificationPlannerTests
         repo.Write($"{prefix}package.json", "{\"devDependencies\":{\"@playwright/test\":\"1\"}}");
         repo.Write($"{prefix}package-lock.json", "{}");
         repo.Write($"{prefix}playwright.config.ts", "export default {};");
+    }
+
+    private static TaskContext ScopedRequirementsTask(params (EvidenceType Type, string? WorkspaceId)[] requirements) => new()
+    {
+        Contract = new TaskContract
+        {
+            EvidenceRequirements = requirements.Select(requirement => new EvidenceRequirement
+            {
+                Type = requirement.Type,
+                WorkspaceId = requirement.WorkspaceId
+            }).ToArray()
+        }
+    };
+
+    private static void WriteNodeWorkspace(TemporaryRepository repo, string relativePath)
+    {
+        var prefix = relativePath == "." ? string.Empty : relativePath + "/";
+        repo.Write($"{prefix}package.json", "{\"scripts\":{\"build\":\"node -e \\\"process.exit(0)\\\"\",\"test\":\"node -e \\\"process.exit(0)\\\"\"}}");
+        repo.Write($"{prefix}package-lock.json", "{}");
     }
 }

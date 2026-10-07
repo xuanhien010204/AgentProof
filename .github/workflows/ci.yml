@@ -37,3 +37,25 @@ jobs:
           path: artifacts/packages/*.nupkg
           if-no-files-found: error
           retention-days: 14
+
+  windows-node-launch:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Restore dependencies
+        run: dotnet restore AgentProof.sln
+
+      - name: Run Windows Node launcher regression
+        run: dotnet test tests/AgentProof.UnitTests/AgentProof.UnitTests.csproj -c Release --no-restore --filter FullyQualifiedName~AvailableNpmCanExecuteNodeVerificationCommand

@@ -76,6 +76,44 @@ public sealed class VerificationRunnerTests
         Assert.True(IsProcessTerminated(capturedPid));
     }
 
+    [Fact]
+    public async Task AvailableNpmCanExecuteNodeVerificationCommand()
+    {
+        if (OperatingSystem.IsWindows() && SafeVerificationRunner.ResolveWindowsNodeLauncher("npm") is null) return;
+        if (!OperatingSystem.IsWindows() && SafeVerificationRunner.ResolveWindowsNodeLauncher("npm") is not null) return;
+
+        using var repo = new TemporaryRepository();
+        repo.Write("package.json", """{"scripts":{"test":"node -e \"process.exit(0)\""}}""");
+        var step = new VerificationStep("node-test", "Run Node.js test", "Node",
+            new VerificationCommand("npm", ["run", "test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests], ".");
+
+        var result = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([step], []));
+
+        var evidence = Assert.Single(result.Evidence);
+        Assert.True(evidence.Status == VerificationStepStatus.Passed,
+            $"{evidence.FailureReason}\n{evidence.OutputSummary}");
+    }
+
+    [Fact]
+    public async Task AvailableNpxCanExecutePlaywrightVerificationCommand()
+    {
+        if (!OperatingSystem.IsWindows() || SafeVerificationRunner.ResolveWindowsNodeLauncher("npx") is null) return;
+
+        using var repo = new TemporaryRepository();
+        repo.Write("package.json", "{\"name\":\"agentproof-runner-test\",\"version\":\"1.0.0\"}");
+        repo.Write("node_modules/playwright/package.json", "{\"name\":\"playwright\",\"version\":\"1.0.0\",\"bin\":{\"playwright\":\"cli.js\"}}");
+        repo.Write("node_modules/playwright/cli.js", "process.exit(0);\r\n");
+        repo.Write("node_modules/.bin/playwright.cmd", "@echo off\r\nexit /b 0\r\n");
+        var step = new VerificationStep("playwright", "Run Playwright", "Browser",
+            new VerificationCommand("npx", ["--no-install", "playwright", "test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Browser], ".");
+
+        var result = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([step], []));
+
+        var evidence = Assert.Single(result.Evidence);
+        Assert.True(evidence.Status == VerificationStepStatus.Passed,
+            $"{evidence.FailureReason}\n{evidence.OutputSummary}");
+    }
+
     private static bool IsProcessTerminated(int pid)
     {
         try

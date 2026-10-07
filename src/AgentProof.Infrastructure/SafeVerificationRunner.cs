@@ -11,6 +11,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
     private const int OutputLimit = 65_536;
     private static readonly HashSet<string> DotNetVerbs = new(StringComparer.Ordinal) { "restore", "build", "test" };
     private static readonly HashSet<string> NodeScripts = new(StringComparer.Ordinal) { "lint", "typecheck", "test", "build" };
+    private static readonly HashSet<string> NodeExecutables = new(StringComparer.OrdinalIgnoreCase) { "npm", "npx", "pnpm", "yarn" };
     private static readonly string[] PlaywrightArguments = ["--no-install", "playwright", "test"];
 
     public async Task<VerificationExecutionResult> RunAsync(
@@ -43,16 +44,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
         {
             var workingDirectory = ValidateWorkingDirectory(root, step.WorkingDirectory);
             ValidateCommand(root, workingDirectory, step.Command);
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = step.Command.Executable,
-                WorkingDirectory = workingDirectory,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            foreach (var argument in step.Command.Arguments) startInfo.ArgumentList.Add(argument);
+            var startInfo = CreateStartInfo(step.Command, workingDirectory);
 
             using var process = new Process { StartInfo = startInfo };
             if (!process.Start()) throw new InvalidOperationException("The verification process could not be started.");
@@ -105,6 +97,61 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
         }
     }
 
+    private static ProcessStartInfo CreateStartInfo(VerificationCommand command, string workingDirectory)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = command.Executable,
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+
+        if (OperatingSystem.IsWindows() && NodeExecutables.Contains(command.Executable))
+        {
+            var launcher = ResolveWindowsNodeLauncher(command.Executable);
+            if (launcher is not null)
+            {
+                startInfo.FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+                var commandLine = string.Join(' ', new[] { launcher }.Concat(command.Arguments).Select(QuoteWindowsArgument));
+                // ProcessStartInfo.ArgumentList escapes embedded quotes for cmd.exe. Use the
+                // raw command-line property only after validation, with a fixed /d /s /c prefix
+                // and arguments assembled exclusively from the allowlisted command.
+                startInfo.Arguments = $"/d /s /c \"{commandLine}\"";
+                return startInfo;
+            }
+        }
+
+        foreach (var argument in command.Arguments) startInfo.ArgumentList.Add(argument);
+        return startInfo;
+    }
+
+    internal static string? ResolveWindowsNodeLauncher(string executable)
+    {
+        if (!OperatingSystem.IsWindows() || !NodeExecutables.Contains(executable)) return null;
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(path)) return null;
+
+        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            foreach (var extension in new[] { ".cmd", ".exe" })
+            {
+                var candidate = Path.Combine(directory, executable + extension);
+                if (File.Exists(candidate)) return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static string QuoteWindowsArgument(string value)
+    {
+        if (value.Contains('"')) throw new InvalidOperationException("Node verification arguments cannot contain quotes.");
+        return $"\"{value}\"";
+    }
+
     private static string ValidateWorkingDirectory(string root, string workingDirectory)
     {
         var full = Path.GetFullPath(workingDirectory);
@@ -133,7 +180,12 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
             return;
         }
 
-        if (executable is "npm" or "pnpm" or "yarn" && args.Count == 2 && args[0] == "run" && NodeScripts.Contains(args[1])) return;
+        if (NodeExecutables.Contains(executable))
+        {
+            if (!string.Equals(command.Executable, executable, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Node verification executables must use an approved logical command name.");
+            if (args.Count == 2 && args[0] == "run" && NodeScripts.Contains(args[1])) return;
+        }
         if (executable == "npx" && args.SequenceEqual(PlaywrightArguments)) return;
         throw new InvalidOperationException("Command is not in the AgentProof verification allowlist.");
     }

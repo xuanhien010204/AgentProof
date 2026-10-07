@@ -11,15 +11,15 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
         var steps = new List<VerificationStep>();
         var gaps = new List<VerificationGap>();
         var contract = task.GetEffectiveContract();
-        var requiredEvidence = new HashSet<EvidenceType>(contract.GetEffectiveEvidenceRequirements().Select(x => x.Type));
-        foreach (var criterion in contract.AcceptanceCriteria)
-            foreach (var evidence in criterion.GetEffectiveEvidenceRequirements())
-                requiredEvidence.Add(evidence.Type);
+        var effectiveRequirements = contract.GetEffectiveEvidenceRequirements()
+            .Concat(contract.AcceptanceCriteria.SelectMany(criterion => criterion.GetEffectiveEvidenceRequirements()))
+            .Distinct()
+            .ToArray();
+        var requiredEvidence = new HashSet<EvidenceType>(effectiveRequirements.Select(x => x.Type));
         if (task.HasBrowserVisibleChanges) requiredEvidence.Add(EvidenceType.Browser);
         if (task.HasDatabaseChanges) requiredEvidence.Add(EvidenceType.Database);
 
-        var browserRequirements = contract.GetEffectiveEvidenceRequirements()
-            .Concat(contract.AcceptanceCriteria.SelectMany(criterion => criterion.GetEffectiveEvidenceRequirements()))
+        var browserRequirements = effectiveRequirements
             .Where(requirement => requirement.Type == EvidenceType.Browser)
             .ToList();
         if (task.HasBrowserVisibleChanges) browserRequirements.Add(new EvidenceRequirement { Type = EvidenceType.Browser });
@@ -28,7 +28,8 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
         var workspaces = repository.Workspaces.Count == 0
             ? await LegacyWorkspaceAsync(repository, cancellationToken)
             : repository.Workspaces;
-        foreach (var workspace in workspaces)
+        var plannedWorkspaces = SelectPlannedWorkspaces(workspaces, effectiveRequirements, task);
+        foreach (var workspace in plannedWorkspaces)
         {
             var workspaceRoot = Path.Combine(repository.RootPath, workspace.RelativePath.Replace('/', Path.DirectorySeparatorChar));
             var workspaceKey = WorkspaceKey(workspace.Id);
@@ -83,6 +84,29 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
                     ? "Acceptance criterion is not connected to any required verification evidence."
                     : $"Acceptance criterion '{criterion.Id}' is not connected to any required verification evidence."));
         return new VerificationPlan(steps, gaps, workspaces.Select(x => x.Id).Distinct(StringComparer.Ordinal).ToArray());
+    }
+
+    private static IReadOnlyList<RepositoryWorkspace> SelectPlannedWorkspaces(
+        IReadOnlyList<RepositoryWorkspace> workspaces,
+        IReadOnlyList<EvidenceRequirement> requirements,
+        TaskContext task)
+    {
+        var workspaceEvidenceRequirements = requirements
+            .Where(requirement => requirement.Type is EvidenceType.Build or EvidenceType.Tests or EvidenceType.Browser)
+            .ToArray();
+
+        // A fallback Browser requirement is intentionally unscoped. Preserve the existing
+        // repository-wide behavior whenever it is present, as well as for legacy and mixed
+        // contracts. Scoped planning is only safe when every executable requirement is scoped.
+        if (task.HasBrowserVisibleChanges || workspaceEvidenceRequirements.Length == 0 ||
+            requirements.Any(requirement => requirement.Type is not (EvidenceType.Build or EvidenceType.Tests or EvidenceType.Browser) ||
+                requirement.WorkspaceId is null))
+            return workspaces;
+
+        var requiredWorkspaceIds = workspaceEvidenceRequirements
+            .Select(requirement => requirement.WorkspaceId!)
+            .ToHashSet(StringComparer.Ordinal);
+        return workspaces.Where(workspace => requiredWorkspaceIds.Contains(workspace.Id)).ToArray();
     }
 
     private async Task<IReadOnlyList<RepositoryWorkspace>> LegacyWorkspaceAsync(RepositoryProfile repository, CancellationToken cancellationToken)

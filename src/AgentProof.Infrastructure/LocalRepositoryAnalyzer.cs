@@ -10,6 +10,8 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
     private const long MaxInspectableFileSize = 1_048_576;
     private static readonly HashSet<string> IgnoredDirectories = new(StringComparer.OrdinalIgnoreCase)
     { ".git", "bin", "obj", "node_modules", ".next", "dist", "build", "coverage", "TestResults" };
+    private static readonly HashSet<string> VitestConfigNames = new(StringComparer.OrdinalIgnoreCase)
+    { "vitest.config.ts", "vitest.config.js", "vitest.config.mts", "vitest.config.mjs" };
 
     public Task<RepositoryProfile> AnalyzeAsync(string repositoryPath, CancellationToken cancellationToken = default)
     {
@@ -56,6 +58,7 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
             if (name.Equals("yarn.lock", StringComparison.OrdinalIgnoreCase)) packageManagers.Add("Yarn");
             if (name.StartsWith("tailwind.config.", StringComparison.OrdinalIgnoreCase)) frameworks.Add("Tailwind CSS");
             if (name.StartsWith("playwright.config.", StringComparison.OrdinalIgnoreCase)) testFrameworks.Add("Playwright");
+            if (VitestConfigNames.Contains(name)) testFrameworks.Add("Vitest");
             if (name.Equals("Dockerfile", StringComparison.OrdinalIgnoreCase)) hasDocker = true;
             if (name.Equals("compose.yml", StringComparison.OrdinalIgnoreCase) || name.Equals("compose.yaml", StringComparison.OrdinalIgnoreCase) ||
                 name.Equals("docker-compose.yml", StringComparison.OrdinalIgnoreCase) || name.Equals("docker-compose.yaml", StringComparison.OrdinalIgnoreCase))
@@ -87,6 +90,7 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
             }
             builder.PackageManager = ResolvePackageManager(directory);
             if (File.Exists(Path.Combine(directory, "playwright.config.ts")) || File.Exists(Path.Combine(directory, "playwright.config.js"))) builder.TestFrameworks.Add("Playwright");
+            if (VitestConfigNames.Any(name => File.Exists(Path.Combine(directory, name)))) builder.TestFrameworks.Add("Vitest");
         }
 
         if (technologies.Contains("Node.js") && packageManagers.Count == 0) packageManagers.Add("npm");
@@ -180,6 +184,7 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
             if (property.Name.Equals("typescript", StringComparison.OrdinalIgnoreCase)) technologies.Add("TypeScript");
             if (property.Name.Equals("tailwindcss", StringComparison.OrdinalIgnoreCase)) frameworks.Add("Tailwind CSS");
             if (property.Name.Equals("@playwright/test", StringComparison.OrdinalIgnoreCase) || property.Name.Equals("playwright", StringComparison.OrdinalIgnoreCase)) tests.Add("Playwright");
+            if (property.Name.Equals("vitest", StringComparison.OrdinalIgnoreCase)) tests.Add("Vitest");
             if (property.Name.Equals("vite", StringComparison.OrdinalIgnoreCase)) frameworks.Add("Vite");
         }
     }

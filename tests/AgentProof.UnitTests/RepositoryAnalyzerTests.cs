@@ -61,6 +61,29 @@ public sealed class RepositoryAnalyzerTests
     }
 
     [Fact]
+    public async Task DetectsVitestDependency()
+    {
+        using var repo = new TemporaryRepository();
+        repo.Write("package.json", """{"devDependencies":{"vitest":"1"}}""");
+
+        Assert.Contains("Vitest", (await _analyzer.AnalyzeAsync(repo.Root)).TestFrameworks);
+    }
+
+    [Theory]
+    [InlineData("vitest.config.ts")]
+    [InlineData("vitest.config.js")]
+    [InlineData("vitest.config.mts")]
+    [InlineData("vitest.config.mjs")]
+    public async Task DetectsVitestConfig(string configName)
+    {
+        using var repo = new TemporaryRepository();
+        repo.Write("package.json", "{}");
+        repo.Write(configName, "export default {};");
+
+        Assert.Contains("Vitest", (await _analyzer.AnalyzeAsync(repo.Root)).TestFrameworks);
+    }
+
+    [Fact]
     public async Task IgnoresGeneratedDirectories()
     {
         using var repo = new TemporaryRepository();
