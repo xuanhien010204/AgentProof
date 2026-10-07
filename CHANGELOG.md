@@ -2,6 +2,24 @@
 
 All notable changes to AgentProof are documented here.
 
+## [0.3.0-preview.2] - 2026-10-07
+
+### Fixed
+
+- Windows verification safely executes allowlisted `npm`, `npx`, `pnpm`, and `yarn` command shims.
+- Workspace-scoped Build and Tests contracts no longer automatically execute unrelated workspaces.
+- Scoped evidence preserves deterministic workspace identity and the existing evaluator semantics.
+- Vitest is detected from package dependencies and standard configuration files.
+
+### CI
+
+- Added Windows Node execution regression coverage.
+
+### Validation
+
+- Dogfooded successfully against EducationCMS and ASRP.
+- Unscoped contracts may still plan overlapping root/child aggregator workspaces; no heuristic deduplication was added.
+
 ## [0.3.0-preview.1] - 2026-10-07
 
 ### Added
