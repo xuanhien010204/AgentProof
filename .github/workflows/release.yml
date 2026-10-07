@@ -3,13 +3,10 @@ name: Preview Release
 on:
   push:
     tags:
-      - v0.3.0-preview.1
+      - 'v*-preview.*'
 
 permissions:
   contents: write
-
-env:
-  PACKAGE_VERSION: 0.3.0-preview.1
 
 jobs:
   release:
@@ -23,6 +20,31 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Derive and validate release version
+        id: release_version
+        shell: bash
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$ ]]; then
+            echo "Release tag must match v<major>.<minor>.<patch>-preview.<number>: $tag" >&2
+            exit 1
+          fi
+
+          version="${tag#v}"
+          project_version="$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' Directory.Build.props | head -n 1 | tr -d '[:space:]')"
+          if [[ -z "$project_version" ]]; then
+            echo "Could not read <Version> from Directory.Build.props" >&2
+            exit 1
+          fi
+
+          if [[ "$version" != "$project_version" ]]; then
+            echo "Release tag version $version does not match project version $project_version" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "package=artifacts/packages/AgentProof.${version}.nupkg" >> "$GITHUB_OUTPUT"
+
       - name: Restore dependencies
         run: dotnet restore AgentProof.sln
 
@@ -35,23 +57,25 @@ jobs:
       - name: Pack tool package
         run: dotnet pack src/AgentProof.Cli/AgentProof.Cli.csproj -c Release --no-build -o artifacts/packages
 
-      - name: Verify package version
+      - name: Verify release package
         shell: bash
         run: |
-          package="artifacts/packages/AgentProof.${PACKAGE_VERSION}.nupkg"
+          package="${{ steps.release_version.outputs.package }}"
+          version="${{ steps.release_version.outputs.version }}"
           test -f "$package"
           unzip -p "$package" AgentProof.nuspec | grep -Fq "<id>AgentProof</id>"
-          unzip -p "$package" AgentProof.nuspec | grep -Fq "<version>${PACKAGE_VERSION}</version>"
+          unzip -p "$package" AgentProof.nuspec | grep -Fq "<version>${version}</version>"
 
       - name: Upload release package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AgentProof-${{ env.PACKAGE_VERSION }}
-          path: artifacts/packages/AgentProof.${{ env.PACKAGE_VERSION }}.nupkg
+          name: AgentProof-${{ steps.release_version.outputs.version }}
+          path: ${{ steps.release_version.outputs.package }}
           if-no-files-found: error
           retention-days: 90
 
       - name: Create GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "artifacts/packages/AgentProof.${PACKAGE_VERSION}.nupkg" --title "$GITHUB_REF_NAME" --generate-notes --prerelease
+          PACKAGE_PATH: ${{ steps.release_version.outputs.package }}
+        run: gh release create "$GITHUB_REF_NAME" "$PACKAGE_PATH" --title "$GITHUB_REF_NAME" --generate-notes --prerelease
