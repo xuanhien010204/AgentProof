@@ -16,7 +16,6 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>agentproof</ToolCommandName>
     <PackageId>AgentProof</PackageId>
-    <Version>0.2.0-preview.1</Version>
     <Authors>AgentProof contributors</Authors>
     <Description>Local-first deterministic engineering assurance tool for AI coding agents.</Description>
     <PackageTags>ai-agent;mcp;dotnet-tool;verification;engineering;codex;developer-tools</PackageTags>
@@ -24,6 +23,8 @@
     <PackageProjectUrl>https://github.com/xuanhien010204/AgentProof</PackageProjectUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryType>git</RepositoryType>
+    <PackageReleaseNotes>Public preview of deterministic repository analysis, workspace-aware verification, evidence evaluation, CLI, and MCP integration.</PackageReleaseNotes>
   </PropertyGroup>
 
   <ItemGroup>

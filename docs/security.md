@@ -1,6 +1,6 @@
 # Security
 
-AgentProof V0.1 runs locally. It does not upload repository source, call an LLM API, require API keys, or provide telemetry.
+AgentProof `0.3.0-preview.1` runs locally. It does not upload repository source, call an LLM API, require API keys, or provide telemetry.
 
 ## Analysis
 

@@ -29,3 +29,11 @@ jobs:
 
       - name: Pack tool package
         run: dotnet pack src/AgentProof.Cli/AgentProof.Cli.csproj -c Release --no-build -o artifacts/packages
+
+      - name: Upload tool package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentProof-package-${{ github.sha }}
+          path: artifacts/packages/*.nupkg
+          if-no-files-found: error
+          retention-days: 14

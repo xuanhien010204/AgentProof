@@ -16,9 +16,11 @@ Local Repository
 
 Code generation is not evidence of correctness. AgentProof reports `Verified` only when every required generated check succeeds and no verification gap remains.
 
-## V0.1 scope
+This repository is preparing the `0.3.0-preview.1` public preview. The preview is local-first and does not publish to NuGet automatically.
 
-AgentProof V0.1 does not require an OpenAI API key, ChatGPT API, Claude API, Gemini API, or any external LLM API. The reasoning model comes from the MCP host agent. Repository analysis and verification run locally.
+## Public preview scope
+
+AgentProof does not require an OpenAI API key, ChatGPT API, Claude API, Gemini API, or any external LLM API. The reasoning model comes from the MCP host agent. Repository analysis and verification run locally.
 
 The solution contains:
 
@@ -30,11 +32,13 @@ The solution contains:
 - Unit and integration test projects.
 
 See [architecture](docs/architecture.md), [MCP integration](docs/mcp-integration.md), and [security](docs/security.md) for details.
+Release history is tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ## Requirements
 
 - .NET 10 SDK
 - Git is optional; its presence is reported during analysis
+- Node.js package-manager tooling is required only when verifying Node.js workspaces.
 
 ## Build and test
 
@@ -49,7 +53,20 @@ dotnet test AgentProof.sln
 ### Local package installation
 
 ```shell
-dotnet tool install --global AgentProof --add-source <local-package-directory> --version 0.2.0-preview.1
+dotnet tool install --global AgentProof --add-source <local-package-directory> --version 0.3.0-preview.1
+```
+
+The package is not published to NuGet.org by the normal CI or release workflow yet. After publication is explicitly enabled, the intended NuGet installation command is:
+
+```shell
+dotnet tool install --global AgentProof --version 0.3.0-preview.1
+```
+
+Update or remove the installed tool with:
+
+```shell
+dotnet tool update --global AgentProof
+dotnet tool uninstall --global AgentProof
 ```
 
 ### Usage
@@ -62,6 +79,8 @@ agentproof plan . --task-context <task.json>
 agentproof verify . --task-context <task.json>
 agentproof mcp
 ```
+
+`recommend`, `plan`, and `verify` require `--task-context <task.json>`.
 
 ## CLI debugging
 

@@ -1,0 +1,57 @@
+name: Preview Release
+
+on:
+  push:
+    tags:
+      - v0.3.0-preview.1
+
+permissions:
+  contents: write
+
+env:
+  PACKAGE_VERSION: 0.3.0-preview.1
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore dependencies
+        run: dotnet restore AgentProof.sln
+
+      - name: Build solution
+        run: dotnet build AgentProof.sln -c Release --no-restore
+
+      - name: Run tests
+        run: dotnet test AgentProof.sln -c Release --no-build
+
+      - name: Pack tool package
+        run: dotnet pack src/AgentProof.Cli/AgentProof.Cli.csproj -c Release --no-build -o artifacts/packages
+
+      - name: Verify package version
+        shell: bash
+        run: |
+          package="artifacts/packages/AgentProof.${PACKAGE_VERSION}.nupkg"
+          test -f "$package"
+          unzip -p "$package" AgentProof.nuspec | grep -Fq "<id>AgentProof</id>"
+          unzip -p "$package" AgentProof.nuspec | grep -Fq "<version>${PACKAGE_VERSION}</version>"
+
+      - name: Upload release package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentProof-${{ env.PACKAGE_VERSION }}
+          path: artifacts/packages/AgentProof.${{ env.PACKAGE_VERSION }}.nupkg
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "artifacts/packages/AgentProof.${PACKAGE_VERSION}.nupkg" --title "$GITHUB_REF_NAME" --generate-notes --prerelease
