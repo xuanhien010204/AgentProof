@@ -16,7 +16,7 @@ Local Repository
 
 Code generation is not evidence of correctness. AgentProof reports `Verified` only when every required generated check succeeds and no verification gap remains.
 
-AgentProof `0.3.0-preview.1` is available as a GitHub prerelease. The preview is local-first, and NuGet.org publication has not happened yet.
+AgentProof `0.3.0-preview.1` is the current public preview, available from NuGet.org and as a GitHub prerelease. The preview is local-first.
 
 ## Public preview scope
 
@@ -50,16 +50,18 @@ dotnet test AgentProof.sln
 
 ## Install as .NET Tool
 
-### Local package installation
-
-```shell
-dotnet tool install --global AgentProof --add-source <local-package-directory> --version 0.3.0-preview.1
-```
-
-The GitHub Release and local package installation paths are available. NuGet.org publication has not happened yet. After publication is explicitly enabled, the intended NuGet installation command is:
+### NuGet.org installation
 
 ```shell
 dotnet tool install --global AgentProof --version 0.3.0-preview.1
+```
+
+### GitHub Release or local package installation
+
+The GitHub Release and local package paths are alternatives to the NuGet.org installation:
+
+```shell
+dotnet tool install --global AgentProof --add-source <local-package-directory> --version 0.3.0-preview.1
 ```
 
 Update or remove the installed tool with:
