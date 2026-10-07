@@ -1,0 +1,35 @@
+{
+  "description": "Verify education CMS course management and API integration",
+  "taskType": "Feature",
+  "complexity": "Medium",
+  "affectedAreas": [
+    "Backend",
+    "Frontend"
+  ],
+  "hasUiChanges": false,
+  "hasDatabaseChanges": false,
+  "hasArchitectureChanges": false,
+  "hasBrowserVisibleChanges": false,
+  "hasDeploymentChanges": false,
+  "contract": {
+    "goal": "Verify full repository build and test suite execution",
+    "constraints": [
+      "Must not modify production database",
+      "Deterministic test runs"
+    ],
+    "acceptanceCriteria": [
+      {
+        "id": "AC-1",
+        "description": "All workspace builds and test suites complete successfully",
+        "requiredEvidence": [
+          "Build",
+          "Tests"
+        ]
+      }
+    ],
+    "requiredEvidence": [
+      "Build",
+      "Tests"
+    ]
+  }
+}

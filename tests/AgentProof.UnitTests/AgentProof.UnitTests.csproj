@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\src\AgentProof.Application\AgentProof.Application.csproj" />
     <ProjectReference Include="..\..\src\AgentProof.Infrastructure\AgentProof.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\AgentProof.Cli\AgentProof.Cli.csproj" />
+    <ProjectReference Include="..\..\benchmarks\AgentProof.Benchmarks\AgentProof.Benchmarks.csproj" />
   </ItemGroup>
 
 </Project>
