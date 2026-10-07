@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\AgentProof.Application\AgentProof.Application.csproj" />
@@ -11,6 +11,22 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>agentproof</ToolCommandName>
+    <PackageId>AgentProof</PackageId>
+    <Version>0.2.0-preview.1</Version>
+    <Authors>AgentProof contributors</Authors>
+    <Description>Local-first deterministic engineering assurance tool for AI coding agents.</Description>
+    <PackageTags>ai-agent;mcp;dotnet-tool;verification;engineering;codex;developer-tools</PackageTags>
+    <RepositoryUrl>https://github.com/xuanhien010204/AgentProof</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/xuanhien010204/AgentProof</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
 </Project>

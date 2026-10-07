@@ -6,3 +6,6 @@ TestResults/
 coverage/
 *.user
 *.suo
+artifacts/
+*.nupkg
+*.snupkg

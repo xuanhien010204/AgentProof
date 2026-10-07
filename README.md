@@ -44,6 +44,24 @@ dotnet build AgentProof.sln
 dotnet test AgentProof.sln
 ```
 
+## Install as .NET Tool
+
+### Local package installation
+
+```shell
+dotnet tool install --global AgentProof --add-source <local-package-directory> --version 0.2.0-preview.1
+```
+
+### Usage
+
+```shell
+agentproof --help
+agentproof analyze .
+agentproof recommend . --task-context <task.json>
+agentproof plan . --task-context <task.json>
+agentproof verify . --task-context <task.json>
+```
+
 ## CLI debugging
 
 ```shell

@@ -26,3 +26,6 @@ jobs:
 
       - name: Run tests
         run: dotnet test AgentProof.sln -c Release --no-build
+
+      - name: Pack tool package
+        run: dotnet pack src/AgentProof.Cli/AgentProof.Cli.csproj -c Release --no-build -o artifacts/packages
