@@ -47,11 +47,24 @@ public sealed record RepositoryWorkspace(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum EvidenceType { Build, Tests, Runtime, Browser, Database, Performance }
 
+public sealed record EvidenceRequirement
+{
+    public EvidenceType Type { get; init; }
+    public string? WorkspaceId { get; init; }
+}
+
 public sealed record AcceptanceCriterion
 {
     public string Id { get; init; } = string.Empty;
     public string Description { get; init; } = string.Empty;
     public IReadOnlyList<EvidenceType> RequiredEvidence { get; init; } = [];
+    public IReadOnlyList<EvidenceRequirement> EvidenceRequirements { get; init; } = [];
+
+    public IReadOnlyList<EvidenceRequirement> GetEffectiveEvidenceRequirements() =>
+        RequiredEvidence.Select(type => new EvidenceRequirement { Type = type })
+            .Concat(EvidenceRequirements)
+            .Distinct()
+            .ToArray();
 }
 
 public sealed record TaskContract
@@ -61,6 +74,13 @@ public sealed record TaskContract
     public IReadOnlyList<string> NonGoals { get; init; } = [];
     public IReadOnlyList<AcceptanceCriterion> AcceptanceCriteria { get; init; } = [];
     public IReadOnlyList<EvidenceType> RequiredEvidence { get; init; } = [];
+    public IReadOnlyList<EvidenceRequirement> EvidenceRequirements { get; init; } = [];
+
+    public IReadOnlyList<EvidenceRequirement> GetEffectiveEvidenceRequirements() =>
+        RequiredEvidence.Select(type => new EvidenceRequirement { Type = type })
+            .Concat(EvidenceRequirements)
+            .Distinct()
+            .ToArray();
 }
 
 public sealed record TaskContext
@@ -120,7 +140,8 @@ public sealed record VerificationStep(
     string WorkingDirectory,
     TimeSpan Timeout,
     bool Required,
-    IReadOnlyList<EvidenceType>? ProvidedEvidence = null)
+    IReadOnlyList<EvidenceType>? ProvidedEvidence = null,
+    string? WorkspaceId = null)
 {
     public IReadOnlyList<EvidenceType> ProvidedEvidence { get; init; } = ProvidedEvidence ?? [];
 }
@@ -129,7 +150,11 @@ public sealed record VerificationGap(string Code, string Reason);
 
 public sealed record VerificationPlan(
     IReadOnlyList<VerificationStep> Steps,
-    IReadOnlyList<VerificationGap> Gaps);
+    IReadOnlyList<VerificationGap> Gaps,
+    IReadOnlyList<string>? WorkspaceIds = null)
+{
+    public IReadOnlyList<string> WorkspaceIds { get; init; } = WorkspaceIds ?? [];
+}
 
 public sealed record VerificationEvidence(
     VerificationStep Step,

@@ -12,13 +12,12 @@ public sealed class DeterministicEvidenceEvaluator : IEvidenceEvaluator
     {
         var allGaps = new List<VerificationGap>(executionGaps);
         foreach (var gap in plan.Gaps)
-        {
-            if (!allGaps.Any(g => g.Code == gap.Code && g.Reason == gap.Reason))
-            {
-                allGaps.Add(gap);
-            }
-        }
+            if (!allGaps.Any(g => g.Code == gap.Code && g.Reason == gap.Reason)) allGaps.Add(gap);
 
+        var knownWorkspaceIds = plan.WorkspaceIds
+            .Concat(plan.Steps.Select(step => step.WorkspaceId).OfType<string>())
+            .Distinct(StringComparer.Ordinal)
+            .ToHashSet(StringComparer.Ordinal);
         var criteriaResults = new List<CriterionResult>();
         var idCounts = contract.AcceptanceCriteria
             .GroupBy(c => c.Id, StringComparer.Ordinal)
@@ -28,199 +27,117 @@ public sealed class DeterministicEvidenceEvaluator : IEvidenceEvaluator
         {
             if (string.IsNullOrWhiteSpace(criterion.Id))
             {
-                if (!allGaps.Any(g => g.Code == "INVALID_CRITERION_ID"))
-                {
-                    allGaps.Add(new VerificationGap("INVALID_CRITERION_ID", "Acceptance criterion has an empty or invalid identifier."));
-                }
-
-                criteriaResults.Add(new CriterionResult
-                {
-                    Id = string.Empty,
-                    Status = CriterionStatus.Gap,
-                    EvidenceStepIds = [],
-                    Reason = "Acceptance criterion has an empty or invalid identifier."
-                });
+                AddGap(allGaps, "INVALID_CRITERION_ID", "Acceptance criterion has an empty or invalid identifier.");
+                criteriaResults.Add(new CriterionResult { Id = string.Empty, Status = CriterionStatus.Gap, EvidenceStepIds = [], Reason = "Acceptance criterion has an empty or invalid identifier." });
                 continue;
             }
 
             if (idCounts.TryGetValue(criterion.Id, out var count) && count > 1)
             {
-                if (!allGaps.Any(g => g.Code == "DUPLICATE_CRITERION_ID" && g.Reason.Contains(criterion.Id)))
-                {
-                    allGaps.Add(new VerificationGap("DUPLICATE_CRITERION_ID", $"Duplicate acceptance criterion identifier '{criterion.Id}'."));
-                }
-
-                criteriaResults.Add(new CriterionResult
-                {
-                    Id = criterion.Id,
-                    Status = CriterionStatus.Gap,
-                    EvidenceStepIds = [],
-                    Reason = $"Duplicate acceptance criterion identifier '{criterion.Id}'."
-                });
+                var duplicateReason = $"Duplicate acceptance criterion identifier '{criterion.Id}'.";
+                AddGap(allGaps, "DUPLICATE_CRITERION_ID", duplicateReason);
+                criteriaResults.Add(new CriterionResult { Id = criterion.Id, Status = CriterionStatus.Gap, EvidenceStepIds = [], Reason = duplicateReason });
                 continue;
             }
 
-            if (criterion.RequiredEvidence.Count == 0)
+            var requirements = criterion.GetEffectiveEvidenceRequirements();
+            if (requirements.Count == 0)
             {
-                if (!allGaps.Any(g => g.Code == "UNMAPPED_ACCEPTANCE_CRITERION" && g.Reason.Contains(criterion.Id)))
-                {
-                    allGaps.Add(new VerificationGap("UNMAPPED_ACCEPTANCE_CRITERION", $"Acceptance criterion '{criterion.Id}' has no required verification evidence."));
-                }
-
-                criteriaResults.Add(new CriterionResult
-                {
-                    Id = criterion.Id,
-                    Status = CriterionStatus.Gap,
-                    EvidenceStepIds = [],
-                    Reason = "Acceptance criterion has no required verification evidence."
-                });
+                var emptyRequirementReason = "Acceptance criterion has no required verification evidence.";
+                AddGap(allGaps, "UNMAPPED_ACCEPTANCE_CRITERION", $"Acceptance criterion '{criterion.Id}' has no required verification evidence.");
+                criteriaResults.Add(new CriterionResult { Id = criterion.Id, Status = CriterionStatus.Gap, EvidenceStepIds = [], Reason = emptyRequirementReason });
                 continue;
             }
 
-            var typeResults = new List<(EvidenceType Type, CriterionStatus Status, string? Reason, IReadOnlyList<string> StepIds)>();
-
-            foreach (var requiredType in criterion.RequiredEvidence)
-            {
-                var matchingPlannedSteps = plan.Steps
-                    .Where(s => s.ProvidedEvidence.Contains(requiredType))
-                    .ToList();
-
-                if (matchingPlannedSteps.Count == 0)
-                {
-                    typeResults.Add((requiredType, CriterionStatus.Gap, $"No verification capability is available for evidence type '{requiredType}'.", []));
-                    continue;
-                }
-
-                var executedForType = executedEvidence
-                    .Where(e => matchingPlannedSteps.Any(s => s.Id == e.Step.Id))
-                    .ToList();
-
-                if (executedForType.Count == 0)
-                {
-                    typeResults.Add((requiredType, CriterionStatus.NotEvaluated, $"Verification step providing '{requiredType}' was not executed.", []));
-                    continue;
-                }
-
-                var failedEvidence = executedForType.FirstOrDefault(e => e.Status is VerificationStepStatus.Failed or VerificationStepStatus.TimedOut);
-                if (failedEvidence is not null)
-                {
-                    typeResults.Add((
-                        requiredType,
-                        CriterionStatus.Failed,
-                        failedEvidence.FailureReason ?? $"Verification step '{failedEvidence.Step.Id}' failed.",
-                        executedForType.Select(e => e.Step.Id).Distinct().ToArray()));
-                    continue;
-                }
-
-                if (executedForType.Count < matchingPlannedSteps.Count)
-                {
-                    typeResults.Add((
-                        requiredType,
-                        CriterionStatus.NotEvaluated,
-                        $"Not all verification steps providing '{requiredType}' were executed.",
-                        executedForType.Select(e => e.Step.Id).Distinct().ToArray()));
-                    continue;
-                }
-
-                if (executedForType.All(e => e.Status == VerificationStepStatus.Passed))
-                {
-                    typeResults.Add((
-                        requiredType,
-                        CriterionStatus.Passed,
-                        null,
-                        executedForType.Select(e => e.Step.Id).Distinct().ToArray()));
-                }
-                else
-                {
-                    typeResults.Add((
-                        requiredType,
-                        CriterionStatus.Failed,
-                        "Verification step did not pass.",
-                        executedForType.Select(e => e.Step.Id).Distinct().ToArray()));
-                }
-            }
-
-            var combinedStepIds = typeResults
-                .SelectMany(r => r.StepIds)
-                .Distinct(StringComparer.Ordinal)
+            var requirementResults = requirements
+                .Select(requirement => EvaluateRequirement(requirement, plan, executedEvidence, knownWorkspaceIds, allGaps))
                 .ToArray();
+            var combinedStepIds = requirementResults.SelectMany(x => x.StepIds).Distinct(StringComparer.Ordinal).ToArray();
 
-            if (typeResults.Any(r => r.Status == CriterionStatus.Failed))
+            var criterionStatus = requirementResults.Any(x => x.Status == CriterionStatus.Failed)
+                ? CriterionStatus.Failed
+                : requirementResults.Any(x => x.Status == CriterionStatus.Gap)
+                    ? CriterionStatus.Gap
+                    : requirementResults.Any(x => x.Status == CriterionStatus.NotEvaluated)
+                        ? CriterionStatus.NotEvaluated
+                        : CriterionStatus.Passed;
+            var reason = requirementResults.FirstOrDefault(x => x.Status == criterionStatus)?.Reason;
+            criteriaResults.Add(new CriterionResult
             {
-                var failure = typeResults.First(r => r.Status == CriterionStatus.Failed);
-                criteriaResults.Add(new CriterionResult
-                {
-                    Id = criterion.Id,
-                    Status = CriterionStatus.Failed,
-                    EvidenceStepIds = combinedStepIds,
-                    Reason = failure.Reason
-                });
-            }
-            else if (typeResults.Any(r => r.Status == CriterionStatus.Gap))
-            {
-                var gap = typeResults.First(r => r.Status == CriterionStatus.Gap);
-                criteriaResults.Add(new CriterionResult
-                {
-                    Id = criterion.Id,
-                    Status = CriterionStatus.Gap,
-                    EvidenceStepIds = combinedStepIds,
-                    Reason = gap.Reason
-                });
-            }
-            else if (typeResults.Any(r => r.Status == CriterionStatus.NotEvaluated))
-            {
-                var notEval = typeResults.First(r => r.Status == CriterionStatus.NotEvaluated);
-                criteriaResults.Add(new CriterionResult
-                {
-                    Id = criterion.Id,
-                    Status = CriterionStatus.NotEvaluated,
-                    EvidenceStepIds = combinedStepIds,
-                    Reason = notEval.Reason
-                });
-            }
-            else
-            {
-                criteriaResults.Add(new CriterionResult
-                {
-                    Id = criterion.Id,
-                    Status = CriterionStatus.Passed,
-                    EvidenceStepIds = combinedStepIds,
-                    Reason = null
-                });
-            }
+                Id = criterion.Id,
+                Status = criterionStatus,
+                EvidenceStepIds = combinedStepIds,
+                Reason = reason
+            });
         }
 
         var hasGlobalRequirementGaps = false;
-        foreach (var globalType in contract.RequiredEvidence)
+        foreach (var requirement in contract.GetEffectiveEvidenceRequirements())
         {
-            var matchingPlanned = plan.Steps.Where(s => s.ProvidedEvidence.Contains(globalType)).ToList();
-            if (matchingPlanned.Count == 0)
-            {
-                hasGlobalRequirementGaps = true;
-                break;
-            }
-
-            var executed = executedEvidence.Where(e => matchingPlanned.Any(s => s.Id == e.Step.Id)).ToList();
-            if (executed.Count < matchingPlanned.Count || executed.Any(e => e.Status != VerificationStepStatus.Passed))
-            {
-                hasGlobalRequirementGaps = true;
-                break;
-            }
+            var result = EvaluateRequirement(requirement, plan, executedEvidence, knownWorkspaceIds, allGaps);
+            if (result.Status != CriterionStatus.Passed) hasGlobalRequirementGaps = true;
         }
 
         var anyRequiredStepFailed = executedEvidence.Any(e => e.Step.Required && e.Status is VerificationStepStatus.Failed or VerificationStepStatus.TimedOut);
         var anyCriterionFailed = criteriaResults.Any(c => c.Status == CriterionStatus.Failed);
-
         var finalStatus = (anyRequiredStepFailed || anyCriterionFailed)
             ? VerificationStatus.NotVerified
             : (allGaps.Count > 0 ||
                criteriaResults.Any(c => c.Status is CriterionStatus.Gap or CriterionStatus.NotEvaluated) ||
                hasGlobalRequirementGaps ||
                executedEvidence.Any(e => !e.Step.Required && e.Status != VerificationStepStatus.Passed) ||
-               (plan.Steps.Count == 0 && (contract.RequiredEvidence.Count > 0 || contract.AcceptanceCriteria.Count > 0)))
+               (plan.Steps.Count == 0 && (contract.GetEffectiveEvidenceRequirements().Count > 0 || contract.AcceptanceCriteria.Count > 0)))
                 ? VerificationStatus.PartiallyVerified
                 : VerificationStatus.Verified;
 
         return new VerificationResult(finalStatus, executedEvidence, allGaps, criteriaResults);
     }
+
+    private static RequirementEvaluation EvaluateRequirement(
+        EvidenceRequirement requirement,
+        VerificationPlan plan,
+        IReadOnlyList<VerificationEvidence> executedEvidence,
+        HashSet<string> knownWorkspaceIds,
+        List<VerificationGap> allGaps)
+    {
+        if (requirement.WorkspaceId is not null && !knownWorkspaceIds.Contains(requirement.WorkspaceId))
+        {
+            var reason = $"Evidence requirement references unknown workspace '{requirement.WorkspaceId}'.";
+            AddGap(allGaps, "MISSING_WORKSPACE_EVIDENCE_PROVIDER", reason);
+            return new RequirementEvaluation(CriterionStatus.Gap, reason, []);
+        }
+
+        var matchingPlannedSteps = plan.Steps
+            .Where(step => step.ProvidedEvidence.Contains(requirement.Type) &&
+                (requirement.WorkspaceId is null || string.Equals(step.WorkspaceId, requirement.WorkspaceId, StringComparison.Ordinal)))
+            .ToList();
+        if (matchingPlannedSteps.Count == 0)
+        {
+            var scope = requirement.WorkspaceId is null ? string.Empty : $" in workspace '{requirement.WorkspaceId}'";
+            return new RequirementEvaluation(CriterionStatus.Gap, $"No verification capability is available for evidence type '{requirement.Type}'{scope}.", []);
+        }
+
+        var executed = executedEvidence
+            .Where(evidence => matchingPlannedSteps.Any(step => step.Id == evidence.Step.Id))
+            .ToList();
+        if (executed.Count == 0)
+            return new RequirementEvaluation(CriterionStatus.NotEvaluated, $"Verification step providing '{requirement.Type}' was not executed.", []);
+
+        var failedEvidence = executed.FirstOrDefault(evidence => evidence.Status is VerificationStepStatus.Failed or VerificationStepStatus.TimedOut);
+        var evidenceStepIds = executed.Select(evidence => evidence.Step.Id).Distinct(StringComparer.Ordinal).ToArray();
+        if (failedEvidence is not null)
+            return new RequirementEvaluation(CriterionStatus.Failed, failedEvidence.FailureReason ?? $"Verification step '{failedEvidence.Step.Id}' failed.", evidenceStepIds);
+        if (executed.Count < matchingPlannedSteps.Count)
+            return new RequirementEvaluation(CriterionStatus.NotEvaluated, $"Not all verification steps providing '{requirement.Type}' were executed.", evidenceStepIds);
+        if (executed.All(evidence => evidence.Status == VerificationStepStatus.Passed))
+            return new RequirementEvaluation(CriterionStatus.Passed, null, evidenceStepIds);
+        return new RequirementEvaluation(CriterionStatus.Failed, "Verification step did not pass.", evidenceStepIds);
+    }
+
+    private static void AddGap(List<VerificationGap> gaps, string code, string reason)
+    {
+        if (!gaps.Any(gap => gap.Code == code && gap.Reason == reason)) gaps.Add(new VerificationGap(code, reason));
+    }
+
+    private sealed record RequirementEvaluation(CriterionStatus Status, string? Reason, IReadOnlyList<string> StepIds);
 }

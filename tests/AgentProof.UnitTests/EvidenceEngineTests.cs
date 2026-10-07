@@ -29,6 +29,26 @@ public sealed class EvidenceEngineTests
         new VerificationCommand("npx", ["--no-install", "playwright", "test"]),
         "repo", TimeSpan.FromMinutes(10), true, [EvidenceType.Browser]);
 
+    private static readonly VerificationStep BackendBuildStep = new(
+        "backend:dotnet-build", "Build backend", ".NET",
+        new VerificationCommand("dotnet", ["build", "Backend.sln"]),
+        "repo/backend", TimeSpan.FromMinutes(5), true, [EvidenceType.Build], "backend");
+
+    private static readonly VerificationStep FrontendBuildStep = new(
+        "frontend:node-build", "Build frontend", "Node",
+        new VerificationCommand("npm", ["run", "build"]),
+        "repo/frontend", TimeSpan.FromMinutes(5), true, [EvidenceType.Build], "frontend");
+
+    private static readonly VerificationStep FrontendTestStep = new(
+        "frontend:node-test", "Test frontend", "Node",
+        new VerificationCommand("npm", ["run", "test"]),
+        "repo/frontend", TimeSpan.FromMinutes(5), true, [EvidenceType.Tests], "frontend");
+
+    private static readonly VerificationStep RootBuildStep = new(
+        "dotnet-build", "Build root", ".NET",
+        new VerificationCommand("dotnet", ["build", "App.sln"]),
+        "repo", TimeSpan.FromMinutes(5), true, [EvidenceType.Build], ".");
+
     private readonly DeterministicEvidenceEvaluator _evaluator = new();
 
     [Fact]
@@ -320,6 +340,157 @@ public sealed class EvidenceEngineTests
         Assert.Equal("Passed", criterion.GetProperty("status").GetString());
         Assert.Equal("dotnet-build", criterion.GetProperty("evidenceStepIds")[0].GetString());
     }
+
+    [Fact]
+    public void BackendBuildRequirementUsesOnlyBackendEvidence()
+    {
+        var contract = new TaskContract
+        {
+            AcceptanceCriteria = [new AcceptanceCriterion
+            {
+                Id = "AC-BACKEND",
+                EvidenceRequirements = [new EvidenceRequirement { Type = EvidenceType.Build, WorkspaceId = "backend" }]
+            }]
+        };
+        var plan = FullStackPlan(BackendBuildStep, FrontendBuildStep);
+
+        var result = _evaluator.Evaluate(contract, plan, [SuccessEvidence(BackendBuildStep)], []);
+
+        var criterion = Assert.Single(result.Criteria);
+        Assert.Equal(CriterionStatus.Passed, criterion.Status);
+        Assert.Equal(["backend:dotnet-build"], criterion.EvidenceStepIds);
+    }
+
+    [Fact]
+    public void FrontendBuildCannotSatisfyBackendBuildRequirement()
+    {
+        var contract = ScopedCriterion("AC-BACKEND", EvidenceType.Build, "backend");
+        var plan = new VerificationPlan([FrontendBuildStep], [], ["backend", "frontend"]);
+
+        var result = _evaluator.Evaluate(contract, plan, [SuccessEvidence(FrontendBuildStep)], []);
+
+        var criterion = Assert.Single(result.Criteria);
+        Assert.Equal(CriterionStatus.Gap, criterion.Status);
+        Assert.Empty(criterion.EvidenceStepIds);
+    }
+
+    [Fact]
+    public void FrontendTestsRequirementMatchesFrontendTestStep()
+    {
+        var contract = ScopedCriterion("AC-FRONTEND-TESTS", EvidenceType.Tests, "frontend");
+        var plan = new VerificationPlan([FrontendTestStep], [], ["frontend"]);
+
+        var result = _evaluator.Evaluate(contract, plan, [SuccessEvidence(FrontendTestStep)], []);
+
+        Assert.Equal(CriterionStatus.Passed, Assert.Single(result.Criteria).Status);
+        Assert.Equal(["frontend:node-test"], Assert.Single(result.Criteria).EvidenceStepIds);
+    }
+
+    [Fact]
+    public void SeparateWorkspaceCriteriaProduceIndependentResults()
+    {
+        var contract = new TaskContract
+        {
+            AcceptanceCriteria =
+            [
+                ScopedCriterionDefinition("AC-BACKEND", EvidenceType.Build, "backend"),
+                ScopedCriterionDefinition("AC-FRONTEND", EvidenceType.Build, "frontend")
+            ]
+        };
+        var plan = FullStackPlan(BackendBuildStep, FrontendBuildStep);
+
+        var result = _evaluator.Evaluate(contract, plan,
+            [SuccessEvidence(BackendBuildStep), FailedEvidence(FrontendBuildStep, "Frontend build failed.")], []);
+
+        Assert.Equal(CriterionStatus.Passed, result.Criteria.Single(x => x.Id == "AC-BACKEND").Status);
+        Assert.Equal(CriterionStatus.Failed, result.Criteria.Single(x => x.Id == "AC-FRONTEND").Status);
+        Assert.Equal(["backend:dotnet-build"], result.Criteria.Single(x => x.Id == "AC-BACKEND").EvidenceStepIds);
+        Assert.Equal(["frontend:node-build"], result.Criteria.Single(x => x.Id == "AC-FRONTEND").EvidenceStepIds);
+        Assert.Equal(VerificationStatus.NotVerified, result.Status);
+    }
+
+    [Fact]
+    public void UnknownWorkspaceProducesDeterministicGap()
+    {
+        var contract = ScopedCriterion("AC-MOBILE", EvidenceType.Build, "mobile");
+        var plan = new VerificationPlan([BackendBuildStep], [], ["backend"]);
+
+        var result = _evaluator.Evaluate(contract, plan, [SuccessEvidence(BackendBuildStep)], []);
+
+        Assert.Equal(CriterionStatus.Gap, Assert.Single(result.Criteria).Status);
+        Assert.Contains(result.Gaps, gap => gap.Code == "MISSING_WORKSPACE_EVIDENCE_PROVIDER");
+    }
+
+    [Fact]
+    public void UnscopedBuildKeepsAllPlannedProviderSemantics()
+    {
+        var contract = new TaskContract
+        {
+            AcceptanceCriteria = [new AcceptanceCriterion { Id = "AC-ANY-BUILD", RequiredEvidence = [EvidenceType.Build] }]
+        };
+        var plan = FullStackPlan(BackendBuildStep, FrontendBuildStep);
+
+        var result = _evaluator.Evaluate(contract, plan,
+            [SuccessEvidence(BackendBuildStep), FailedEvidence(FrontendBuildStep, "Frontend build failed.")], []);
+
+        Assert.Equal(CriterionStatus.Failed, Assert.Single(result.Criteria).Status);
+        Assert.Equal(VerificationStatus.NotVerified, result.Status);
+    }
+
+    [Fact]
+    public void RootWorkspaceRequirementMatchesRootWorkspace()
+    {
+        var contract = ScopedCriterion("AC-ROOT", EvidenceType.Build, ".");
+        var plan = new VerificationPlan([RootBuildStep], [], ["."]);
+
+        var result = _evaluator.Evaluate(contract, plan, [SuccessEvidence(RootBuildStep)], []);
+
+        Assert.Equal(CriterionStatus.Passed, Assert.Single(result.Criteria).Status);
+    }
+
+    [Fact]
+    public void WorkspaceRequirementWithoutExecutedEvidenceRemainsNotEvaluated()
+    {
+        var contract = ScopedCriterion("AC-BACKEND", EvidenceType.Build, "backend");
+        var plan = new VerificationPlan([BackendBuildStep], [], ["backend"]);
+
+        var result = _evaluator.Evaluate(contract, plan, [], []);
+
+        Assert.Equal(CriterionStatus.NotEvaluated, Assert.Single(result.Criteria).Status);
+    }
+
+    [Fact]
+    public void LegacyAndScopedEvidenceRequirementsSerializeAndDeserialize()
+    {
+        var contract = new TaskContract
+        {
+            RequiredEvidence = [EvidenceType.Build],
+            EvidenceRequirements = [new EvidenceRequirement { Type = EvidenceType.Tests, WorkspaceId = "frontend" }]
+        };
+
+        var json = JsonSerializer.Serialize(contract, SerializerOptions);
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal("Tests", document.RootElement.GetProperty("evidenceRequirements")[0].GetProperty("type").GetString());
+        Assert.Equal("frontend", document.RootElement.GetProperty("evidenceRequirements")[0].GetProperty("workspaceId").GetString());
+
+        var legacy = JsonSerializer.Deserialize<TaskContract>("{\"requiredEvidence\":[\"Build\"]}", SerializerOptions);
+        Assert.Equal([EvidenceType.Build], legacy!.RequiredEvidence);
+        Assert.Empty(legacy.EvidenceRequirements);
+    }
+
+    private static TaskContract ScopedCriterion(string id, EvidenceType type, string workspaceId) => new()
+    {
+        AcceptanceCriteria = [ScopedCriterionDefinition(id, type, workspaceId)]
+    };
+
+    private static AcceptanceCriterion ScopedCriterionDefinition(string id, EvidenceType type, string workspaceId) => new()
+    {
+        Id = id,
+        EvidenceRequirements = [new EvidenceRequirement { Type = type, WorkspaceId = workspaceId }]
+    };
+
+    private static VerificationPlan FullStackPlan(params VerificationStep[] steps) =>
+        new(steps, [], ["backend", "frontend"]);
 
     private static VerificationEvidence SuccessEvidence(VerificationStep step) =>
         new(step, VerificationStepStatus.Passed, 0, TimeSpan.FromSeconds(1), "Success", null);

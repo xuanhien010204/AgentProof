@@ -11,8 +11,10 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
         var steps = new List<VerificationStep>();
         var gaps = new List<VerificationGap>();
         var contract = task.GetEffectiveContract();
-        var requiredEvidence = new HashSet<EvidenceType>(contract.RequiredEvidence);
-        foreach (var criterion in contract.AcceptanceCriteria) foreach (var evidence in criterion.RequiredEvidence) requiredEvidence.Add(evidence);
+        var requiredEvidence = new HashSet<EvidenceType>(contract.GetEffectiveEvidenceRequirements().Select(x => x.Type));
+        foreach (var criterion in contract.AcceptanceCriteria)
+            foreach (var evidence in criterion.GetEffectiveEvidenceRequirements())
+                requiredEvidence.Add(evidence.Type);
         if (task.HasBrowserVisibleChanges) requiredEvidence.Add(EvidenceType.Browser);
         if (task.HasDatabaseChanges) requiredEvidence.Add(EvidenceType.Database);
 
@@ -26,9 +28,9 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
             if (workspace.Technologies.Contains(".NET"))
             {
                 var suffix = workspace.DotNetEntryPoint is null ? Array.Empty<string>() : new[] { workspace.DotNetEntryPoint };
-                steps.Add(DotNetStep(StepId(workspaceKey, "dotnet-restore"), "Restore .NET dependencies", "restore", suffix, workspaceRoot, []));
-                steps.Add(DotNetStep(StepId(workspaceKey, "dotnet-build"), "Build .NET solution", "build", suffix, workspaceRoot, [EvidenceType.Build]));
-                steps.Add(DotNetStep(StepId(workspaceKey, "dotnet-test"), "Run .NET tests", "test", suffix, workspaceRoot, [EvidenceType.Tests]));
+                steps.Add(DotNetStep(StepId(workspaceKey, "dotnet-restore"), "Restore .NET dependencies", "restore", suffix, workspaceRoot, [], workspace.Id));
+                steps.Add(DotNetStep(StepId(workspaceKey, "dotnet-build"), "Build .NET solution", "build", suffix, workspaceRoot, [EvidenceType.Build], workspace.Id));
+                steps.Add(DotNetStep(StepId(workspaceKey, "dotnet-test"), "Run .NET tests", "test", suffix, workspaceRoot, [EvidenceType.Tests], workspace.Id));
             }
 
             if (workspace.Technologies.Contains("Node.js"))
@@ -37,7 +39,7 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
                 if (scripts.Count == 0) scripts = await configurationReader.ReadPackageScriptsAsync(workspaceRoot, cancellationToken);
                 var manager = workspace.PackageManager ?? "npm";
                 foreach (var script in KnownNodeScripts.Where(scripts.ContainsKey))
-                    steps.Add(new VerificationStep(StepId(workspaceKey, $"node-{script}"), $"Run Node.js {script}", "Node", new VerificationCommand(manager, ["run", script]), workspaceRoot, TimeSpan.FromMinutes(5), true, NodeScriptEvidence(script)));
+                    steps.Add(new VerificationStep(StepId(workspaceKey, $"node-{script}"), $"Run Node.js {script}", "Node", new VerificationCommand(manager, ["run", script]), workspaceRoot, TimeSpan.FromMinutes(5), true, NodeScriptEvidence(script), workspace.Id));
             }
         }
 
@@ -48,7 +50,7 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
             {
                 var workspaceRoot = Path.Combine(repository.RootPath, playwrightWorkspace.RelativePath.Replace('/', Path.DirectorySeparatorChar));
                 steps.Add(new VerificationStep(StepId(WorkspaceKey(playwrightWorkspace.Id), "playwright"), "Run Playwright browser tests", "Browser",
-                    new VerificationCommand("npx", ["--no-install", "playwright", "test"]), workspaceRoot, TimeSpan.FromMinutes(10), true, [EvidenceType.Browser]));
+                    new VerificationCommand("npx", ["--no-install", "playwright", "test"]), workspaceRoot, TimeSpan.FromMinutes(10), true, [EvidenceType.Browser], playwrightWorkspace.Id));
             }
             else gaps.Add(new VerificationGap("BROWSER_VERIFICATION_UNAVAILABLE", "Browser verification is required, but no workspace has Playwright installed. AgentProof will not install it automatically."));
         }
@@ -56,11 +58,11 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
         var providedEvidence = new HashSet<EvidenceType>(steps.SelectMany(x => x.ProvidedEvidence));
         AddMissingEvidenceGaps(gaps, requiredEvidence, providedEvidence);
         foreach (var criterion in contract.AcceptanceCriteria)
-            if (criterion.RequiredEvidence.Count == 0 && contract.RequiredEvidence.Count == 0)
+            if (criterion.GetEffectiveEvidenceRequirements().Count == 0 && contract.GetEffectiveEvidenceRequirements().Count == 0)
                 gaps.Add(new VerificationGap("UNVERIFIED_ACCEPTANCE_CRITERION", string.IsNullOrWhiteSpace(criterion.Id)
                     ? "Acceptance criterion is not connected to any required verification evidence."
                     : $"Acceptance criterion '{criterion.Id}' is not connected to any required verification evidence."));
-        return new VerificationPlan(steps, gaps);
+        return new VerificationPlan(steps, gaps, workspaces.Select(x => x.Id).Distinct(StringComparer.Ordinal).ToArray());
     }
 
     private async Task<IReadOnlyList<RepositoryWorkspace>> LegacyWorkspaceAsync(RepositoryProfile repository, CancellationToken cancellationToken)
@@ -83,8 +85,8 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
         }) if (required.Contains(type) && !provided.Contains(type)) gaps.Add(new VerificationGap(code, reason));
     }
 
-    private static VerificationStep DotNetStep(string id, string name, string verb, IReadOnlyList<string> suffix, string root, IReadOnlyList<EvidenceType> provided) =>
-        new(id, name, ".NET", new VerificationCommand("dotnet", [verb, .. suffix]), root, TimeSpan.FromMinutes(5), true, provided);
+    private static VerificationStep DotNetStep(string id, string name, string verb, IReadOnlyList<string> suffix, string root, IReadOnlyList<EvidenceType> provided, string workspaceId) =>
+        new(id, name, ".NET", new VerificationCommand("dotnet", [verb, .. suffix]), root, TimeSpan.FromMinutes(5), true, provided, workspaceId);
 
     private static IReadOnlyList<EvidenceType> NodeScriptEvidence(string script) => script switch
     {

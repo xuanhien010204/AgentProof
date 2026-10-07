@@ -44,7 +44,10 @@ public sealed class VerificationPlannerTests
 
         Assert.Equal(3, backend.Length);
         Assert.Equal(2, frontend.Length);
+        Assert.Equal(["backend", "frontend"], plan.WorkspaceIds);
         Assert.Equal(backend.Length + frontend.Length, plan.Steps.Select(x => x.Id).Distinct().Count());
+        Assert.All(backend, x => Assert.Equal("backend", x.WorkspaceId));
+        Assert.All(frontend, x => Assert.Equal("frontend", x.WorkspaceId));
         Assert.All(backend, x => Assert.Equal(Path.Combine(repo.Root, "backend"), x.WorkingDirectory));
         Assert.All(frontend, x => Assert.Equal(Path.Combine(repo.Root, "frontend"), x.WorkingDirectory));
         Assert.Contains(backend, x => x.Command.Arguments.SequenceEqual(["build", "App.sln"]));
