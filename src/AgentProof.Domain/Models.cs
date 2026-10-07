@@ -29,7 +29,20 @@ public sealed record RepositoryProfile(
     IReadOnlyList<string> PackageManagers,
     bool HasDocker,
     bool HasGit,
-    long EstimatedSize);
+    long EstimatedSize)
+{
+    public IReadOnlyList<RepositoryWorkspace> Workspaces { get; init; } = [];
+}
+
+public sealed record RepositoryWorkspace(
+    string Id,
+    string RelativePath,
+    IReadOnlyList<string> Technologies,
+    IReadOnlyList<string> Frameworks,
+    IReadOnlyList<string> TestFrameworks,
+    string? PackageManager,
+    string? DotNetEntryPoint,
+    IReadOnlyDictionary<string, string> PackageScripts);
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum EvidenceType { Build, Tests, Runtime, Browser, Database, Performance }
@@ -149,4 +162,3 @@ public sealed record VerificationResult(
 {
     public IReadOnlyList<CriterionResult> Criteria { get; init; } = Criteria ?? [];
 }
-

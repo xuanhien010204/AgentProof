@@ -42,7 +42,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
         try
         {
             var workingDirectory = ValidateWorkingDirectory(root, step.WorkingDirectory);
-            ValidateCommand(root, step.Command);
+            ValidateCommand(root, workingDirectory, step.Command);
             var startInfo = new ProcessStartInfo
             {
                 FileName = step.Command.Executable,
@@ -116,7 +116,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
         return full;
     }
 
-    private static void ValidateCommand(string root, VerificationCommand command)
+    private static void ValidateCommand(string root, string workingDirectory, VerificationCommand command)
     {
         var executable = Path.GetFileNameWithoutExtension(command.Executable).ToLowerInvariant();
         var args = command.Arguments;
@@ -127,7 +127,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
             if (Path.IsPathRooted(target) || !(target.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
                 target.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase) || target.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("The .NET verification target is not an approved solution or project path.");
-            var resolved = Path.GetFullPath(Path.Combine(root, target));
+            var resolved = Path.GetFullPath(Path.Combine(workingDirectory, target));
             ValidatePathInsideRoot(root, resolved);
             if (!File.Exists(resolved)) throw new InvalidOperationException("The .NET verification target does not exist.");
             return;

@@ -123,6 +123,7 @@ The server intentionally does not expose code generation, file editing, package 
 ## Current limitations
 
 - Browser verification requires an existing Playwright installation and is reported as a gap otherwise.
+- Repository discovery supports nested .NET solutions/projects and independent Node workspaces. Verification is planned per workspace, but acceptance criteria remain repository-wide by evidence type; workspace-scoped criteria are deferred to a future phase.
 - Verification trusts the local repository being checked. Build and test systems can execute repository-defined hooks; see the security document.
 - Stdio transport only; no persistence, UI, telemetry, or cloud service.
 

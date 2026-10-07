@@ -80,4 +80,43 @@ public sealed class RepositoryAnalyzerTests
         Assert.Contains("Docker", profile.Technologies);
         Assert.Contains("Docker Compose", profile.Technologies);
     }
+
+    [Fact]
+    public async Task DiscoversNestedDotNetWorkspaceAndSolutionEntryPoint()
+    {
+        using var repo = new TemporaryRepository();
+        repo.Write("backend/App.sln", "Microsoft Visual Studio Solution File, Format Version 12.00");
+
+        var workspace = Assert.Single((await _analyzer.AnalyzeAsync(repo.Root)).Workspaces);
+
+        Assert.Equal("backend", workspace.Id);
+        Assert.Equal("App.sln", workspace.DotNetEntryPoint);
+        Assert.Contains(".NET", workspace.Technologies);
+    }
+
+    [Fact]
+    public async Task DiscoversNodeWorkspacesWithLocalPackageManagers()
+    {
+        using var repo = new TemporaryRepository();
+        repo.Write("frontend/package.json", "{\"scripts\":{\"build\":\"vite build\"}}");
+        repo.Write("frontend/package-lock.json", "{}");
+        repo.Write("tools/package.json", "{\"scripts\":{\"test\":\"vitest\"}}");
+        repo.Write("tools/pnpm-lock.yaml", "lockfileVersion: 9");
+
+        var workspaces = (await _analyzer.AnalyzeAsync(repo.Root)).Workspaces;
+
+        Assert.Equal(["frontend", "tools"], workspaces.Select(x => x.Id).ToArray());
+        Assert.Equal("npm", workspaces.Single(x => x.Id == "frontend").PackageManager);
+        Assert.Equal("pnpm", workspaces.Single(x => x.Id == "tools").PackageManager);
+    }
+
+    [Fact]
+    public async Task IgnoresAllConfiguredGeneratedDirectoriesDuringWorkspaceDiscovery()
+    {
+        using var repo = new TemporaryRepository();
+        foreach (var directory in new[] { "node_modules", "bin", "obj", ".next", "dist", "build", "coverage", "TestResults" })
+            repo.Write($"{directory}/nested/package.json", "{\"scripts\":{\"build\":\"build\"}}");
+
+        Assert.Empty((await _analyzer.AnalyzeAsync(repo.Root)).Workspaces);
+    }
 }
