@@ -4,9 +4,17 @@ on:
   push:
     tags:
       - 'v*-preview.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Preview version to publish
+        required: true
+        default: 0.3.0-preview.1
+        type: string
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release:
@@ -22,15 +30,24 @@ jobs:
 
       - name: Derive and validate release version
         id: release_version
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          tag="$GITHUB_REF_NAME"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="$DISPATCH_VERSION"
+            tag="v${version}"
+          else
+            tag="$GITHUB_REF_NAME"
+            version="${tag#v}"
+          fi
+
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$ ]]; then
             echo "Release tag must match v<major>.<minor>.<patch>-preview.<number>: $tag" >&2
             exit 1
           fi
 
-          version="${tag#v}"
           project_version="$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' Directory.Build.props | head -n 1 | tr -d '[:space:]')"
           if [[ -z "$project_version" ]]; then
             echo "Could not read <Version> from Directory.Build.props" >&2
@@ -42,19 +59,47 @@ jobs:
             exit 1
           fi
 
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            release_tag="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)"
+            if [[ "$release_tag" != "$tag" ]]; then
+              echo "GitHub Release does not exist for tag: $tag" >&2
+              exit 1
+            fi
+          fi
+
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "package_name=AgentProof.${version}.nupkg" >> "$GITHUB_OUTPUT"
           echo "package=artifacts/packages/AgentProof.${version}.nupkg" >> "$GITHUB_OUTPUT"
 
+      - name: Download existing GitHub Release asset
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_version.outputs.tag }}
+          PACKAGE_NAME: ${{ steps.release_version.outputs.package_name }}
+        run: |
+          mkdir -p artifacts/packages
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$PACKAGE_NAME" \
+            --dir artifacts/packages \
+            --clobber
+
       - name: Restore dependencies
+        if: github.event_name == 'push'
         run: dotnet restore AgentProof.sln
 
       - name: Build solution
+        if: github.event_name == 'push'
         run: dotnet build AgentProof.sln -c Release --no-restore
 
       - name: Run tests
+        if: github.event_name == 'push'
         run: dotnet test AgentProof.sln -c Release --no-build
 
       - name: Pack tool package
+        if: github.event_name == 'push'
         run: dotnet pack src/AgentProof.Cli/AgentProof.Cli.csproj -c Release --no-build -o artifacts/packages
 
       - name: Verify release package
@@ -65,8 +110,35 @@ jobs:
           test -f "$package"
           unzip -p "$package" AgentProof.nuspec | grep -Fq "<id>AgentProof</id>"
           unzip -p "$package" AgentProof.nuspec | grep -Fq "<version>${version}</version>"
+          unzip -p "$package" AgentProof.nuspec | grep -Fq '<packageType name="DotnetTool"'
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$version" == "0.3.0-preview.1" ]]; then
+            expected_sha256="a87f0a8a1f84e30affdef90ba01fdd80c6d7a93396fe897631f22024f2c3f47a"
+            actual_sha256="$(sha256sum "$package" | cut -d ' ' -f 1)"
+            if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+              echo "GitHub Release asset digest mismatch: $actual_sha256" >&2
+              exit 1
+            fi
+          fi
+
+      - name: NuGet login
+        if: github.event_name == 'workflow_dispatch'
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: buixuanhien
+
+      - name: Publish package to NuGet.org
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push "${{ steps.release_version.outputs.package }}" \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json
 
       - name: Upload release package artifact
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: AgentProof-${{ steps.release_version.outputs.version }}
@@ -75,6 +147,7 @@ jobs:
           retention-days: 90
 
       - name: Create GitHub prerelease
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           PACKAGE_PATH: ${{ steps.release_version.outputs.package }}
