@@ -47,7 +47,8 @@ public static class Program
             new LocalRepositoryAnalyzer(),
             new DeterministicSkillRecommender(),
             new DeterministicVerificationPlanner(new RepositoryConfigurationReader()),
-            new SafeVerificationRunner());
+            new SafeVerificationRunner(),
+            new DeterministicEvidenceEvaluator());
 
         try
         {

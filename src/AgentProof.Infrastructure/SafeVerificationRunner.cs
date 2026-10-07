@@ -13,7 +13,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
     private static readonly HashSet<string> NodeScripts = new(StringComparer.Ordinal) { "lint", "typecheck", "test", "build" };
     private static readonly string[] PlaywrightArguments = ["--no-install", "playwright", "test"];
 
-    public async Task<VerificationResult> RunAsync(
+    public async Task<VerificationExecutionResult> RunAsync(
         string repositoryPath, VerificationPlan plan, CancellationToken cancellationToken = default)
     {
         var root = LocalRepositoryAnalyzer.NormalizeExistingDirectory(repositoryPath);
@@ -29,14 +29,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
             if (evidence[^1].Status != VerificationStepStatus.Passed && step.Required) break;
         }
 
-        var requiredFailure = evidence.Any(x => x.Step.Required && x.Status != VerificationStepStatus.Passed);
-        var optionalFailure = evidence.Any(x => !x.Step.Required && x.Status != VerificationStepStatus.Passed);
-        var status = requiredFailure
-            ? VerificationStatus.NotVerified
-            : gaps.Count > 0 || optionalFailure
-                ? VerificationStatus.PartiallyVerified
-                : VerificationStatus.Verified;
-        return new VerificationResult(status, evidence, gaps);
+        return new VerificationExecutionResult(evidence, gaps);
     }
 
     internal Action<Process>? ProcessStartedForTesting { get; init; }

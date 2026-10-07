@@ -12,7 +12,7 @@ public sealed class VerificationRunnerTests
         using var repo = MinimalProject(valid: true);
         var result = await RunBuildAsync(repo.Root, TimeSpan.FromMinutes(1));
         var evidence = Assert.Single(result.Evidence);
-        Assert.Equal(VerificationStatus.Verified, result.Status);
+        Assert.Equal(VerificationStepStatus.Passed, evidence.Status);
         Assert.Equal(0, evidence.ExitCode);
         Assert.True(evidence.Duration > TimeSpan.Zero);
     }
@@ -22,7 +22,6 @@ public sealed class VerificationRunnerTests
     {
         using var repo = MinimalProject(valid: false);
         var result = await RunBuildAsync(repo.Root, TimeSpan.FromMinutes(1));
-        Assert.Equal(VerificationStatus.NotVerified, result.Status);
         Assert.Equal(VerificationStepStatus.Failed, Assert.Single(result.Evidence).Status);
     }
 
@@ -31,7 +30,6 @@ public sealed class VerificationRunnerTests
     {
         using var repo = MinimalProject(valid: true);
         var result = await RunBuildAsync(repo.Root, TimeSpan.Zero);
-        Assert.Equal(VerificationStatus.NotVerified, result.Status);
         Assert.Equal(VerificationStepStatus.TimedOut, Assert.Single(result.Evidence).Status);
     }
 
@@ -49,7 +47,6 @@ public sealed class VerificationRunnerTests
 
         var result = await runner.RunAsync(repo.Root, new VerificationPlan([step], []));
 
-        Assert.Equal(VerificationStatus.NotVerified, result.Status);
         Assert.Equal(VerificationStepStatus.TimedOut, Assert.Single(result.Evidence).Status);
         Assert.True(capturedPid > 0);
         Assert.True(IsProcessTerminated(capturedPid));
@@ -103,7 +100,6 @@ public sealed class VerificationRunnerTests
         var step = new VerificationStep("bad", "Bad", "Shell",
             new VerificationCommand("powershell", ["-Command", "Get-ChildItem"]), repo.Root, TimeSpan.FromSeconds(1), true);
         var result = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([step], []));
-        Assert.Equal(VerificationStatus.NotVerified, result.Status);
         Assert.Contains("allowlist", Assert.Single(result.Evidence).FailureReason, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -120,7 +116,6 @@ public sealed class VerificationRunnerTests
         var step = new VerificationStep("bad", "Bad", "Test",
             new VerificationCommand(executable, args), repo.Root, TimeSpan.FromSeconds(1), true);
         var result = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([step], []));
-        Assert.Equal(VerificationStatus.NotVerified, result.Status);
         Assert.Contains("allowlist", Assert.Single(result.Evidence).FailureReason, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -131,13 +126,11 @@ public sealed class VerificationRunnerTests
         var stepRelative = new VerificationStep("escape-rel", "Escape", ".NET",
             new VerificationCommand("dotnet", ["build", "../Escape.csproj"]), repo.Root, TimeSpan.FromSeconds(5), true);
         var resultRelative = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([stepRelative], []));
-        Assert.Equal(VerificationStatus.NotVerified, resultRelative.Status);
         Assert.Contains("escapes the repository root", Assert.Single(resultRelative.Evidence).FailureReason, StringComparison.OrdinalIgnoreCase);
 
         var stepRooted = new VerificationStep("escape-root", "Escape", ".NET",
             new VerificationCommand("dotnet", ["build", Path.Combine(Path.GetTempPath(), "Escape.csproj")]), repo.Root, TimeSpan.FromSeconds(5), true);
         var resultRooted = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([stepRooted], []));
-        Assert.Equal(VerificationStatus.NotVerified, resultRooted.Status);
         Assert.Contains("approved solution or project path", Assert.Single(resultRooted.Evidence).FailureReason, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -149,7 +142,6 @@ public sealed class VerificationRunnerTests
         var step = new VerificationStep("outside-cwd", "Outside", ".NET",
             new VerificationCommand("dotnet", ["build", "Test.csproj"]), outsideDirectory, TimeSpan.FromSeconds(5), true);
         var result = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([step], []));
-        Assert.Equal(VerificationStatus.NotVerified, result.Status);
         Assert.Contains("must be inside the repository root", Assert.Single(result.Evidence).FailureReason, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -195,7 +187,7 @@ public sealed class VerificationRunnerTests
         return repo;
     }
 
-    private static Task<VerificationResult> RunBuildAsync(string root, TimeSpan timeout)
+    private static Task<VerificationExecutionResult> RunBuildAsync(string root, TimeSpan timeout)
     {
         var step = new VerificationStep("build", "Build", ".NET",
             new VerificationCommand("dotnet", ["build", "Test.csproj"]), root, timeout, true);

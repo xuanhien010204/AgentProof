@@ -126,7 +126,27 @@ public sealed record VerificationEvidence(
     string OutputSummary,
     string? FailureReason);
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum CriterionStatus { Passed, Failed, Gap, NotEvaluated }
+
+public sealed record CriterionResult
+{
+    public string Id { get; init; } = string.Empty;
+    public CriterionStatus Status { get; init; } = CriterionStatus.NotEvaluated;
+    public IReadOnlyList<string> EvidenceStepIds { get; init; } = [];
+    public string? Reason { get; init; }
+}
+
+public sealed record VerificationExecutionResult(
+    IReadOnlyList<VerificationEvidence> Evidence,
+    IReadOnlyList<VerificationGap> Gaps);
+
 public sealed record VerificationResult(
     VerificationStatus Status,
     IReadOnlyList<VerificationEvidence> Evidence,
-    IReadOnlyList<VerificationGap> Gaps);
+    IReadOnlyList<VerificationGap> Gaps,
+    IReadOnlyList<CriterionResult>? Criteria = null)
+{
+    public IReadOnlyList<CriterionResult> Criteria { get; init; } = Criteria ?? [];
+}
+

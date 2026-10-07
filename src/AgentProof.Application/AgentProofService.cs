@@ -6,8 +6,11 @@ public sealed class AgentProofService(
     IRepositoryAnalyzer analyzer,
     ISkillRecommender recommender,
     IVerificationPlanner planner,
-    IVerificationRunner runner)
+    IVerificationRunner runner,
+    IEvidenceEvaluator? evaluator = null)
 {
+    private readonly IEvidenceEvaluator _evaluator = evaluator ?? new DeterministicEvidenceEvaluator();
+
     public Task<RepositoryProfile> AnalyzeRepositoryAsync(string repositoryPath, CancellationToken cancellationToken = default) =>
         analyzer.AnalyzeAsync(repositoryPath, cancellationToken);
 
@@ -24,6 +27,7 @@ public sealed class AgentProofService(
     {
         var profile = await analyzer.AnalyzeAsync(repositoryPath, cancellationToken);
         var plan = await planner.CreateAsync(profile, task, cancellationToken);
-        return await runner.RunAsync(profile.RootPath, plan, cancellationToken);
+        var execution = await runner.RunAsync(profile.RootPath, plan, cancellationToken);
+        return _evaluator.Evaluate(task.GetEffectiveContract(), plan, execution.Evidence, execution.Gaps);
     }
 }

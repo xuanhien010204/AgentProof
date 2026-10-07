@@ -109,7 +109,8 @@ public sealed class CliExitCodeTests
             new StubAnalyzer(),
             new StubRecommender(),
             new StubPlanner(),
-            new StubRunner(verificationResult));
+            new StubRunner(),
+            new StubEvaluator(verificationResult));
     }
 
     private sealed class StubAnalyzer : IRepositoryAnalyzer
@@ -129,9 +130,15 @@ public sealed class CliExitCodeTests
             Task.FromResult(new VerificationPlan([], []));
     }
 
-    private sealed class StubRunner(VerificationResult result) : IVerificationRunner
+    private sealed class StubRunner : IVerificationRunner
     {
-        public Task<VerificationResult> RunAsync(string repositoryPath, VerificationPlan plan, CancellationToken cancellationToken = default) =>
-            Task.FromResult(result);
+        public Task<VerificationExecutionResult> RunAsync(string repositoryPath, VerificationPlan plan, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new VerificationExecutionResult([], []));
+    }
+
+    private sealed class StubEvaluator(VerificationResult result) : IEvidenceEvaluator
+    {
+        public VerificationResult Evaluate(TaskContract contract, VerificationPlan plan, IReadOnlyList<VerificationEvidence> executedEvidence, IReadOnlyList<VerificationGap> executionGaps) =>
+            result;
     }
 }

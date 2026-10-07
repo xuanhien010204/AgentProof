@@ -17,6 +17,7 @@ public static class McpServerHost
         builder.Services.AddSingleton<IRepositoryConfigurationReader, RepositoryConfigurationReader>();
         builder.Services.AddSingleton<IVerificationPlanner, DeterministicVerificationPlanner>();
         builder.Services.AddSingleton<IVerificationRunner, SafeVerificationRunner>();
+        builder.Services.AddSingleton<IEvidenceEvaluator, DeterministicEvidenceEvaluator>();
         builder.Services.AddSingleton<AgentProofService>();
         builder.Services.AddMcpServer()
             .WithStdioServerTransport()

@@ -25,5 +25,15 @@ public interface IVerificationPlanner
 
 public interface IVerificationRunner
 {
-    Task<VerificationResult> RunAsync(string repositoryPath, VerificationPlan plan, CancellationToken cancellationToken = default);
+    Task<VerificationExecutionResult> RunAsync(string repositoryPath, VerificationPlan plan, CancellationToken cancellationToken = default);
 }
+
+public interface IEvidenceEvaluator
+{
+    VerificationResult Evaluate(
+        TaskContract contract,
+        VerificationPlan plan,
+        IReadOnlyList<VerificationEvidence> executedEvidence,
+        IReadOnlyList<VerificationGap> executionGaps);
+}
+
