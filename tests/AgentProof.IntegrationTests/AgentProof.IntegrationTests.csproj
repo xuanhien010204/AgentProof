@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\src\AgentProof.Application\AgentProof.Application.csproj" />
     <ProjectReference Include="..\..\src\AgentProof.Infrastructure\AgentProof.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\AgentProof.Mcp\AgentProof.Mcp.csproj" />
+    <ProjectReference Include="..\..\src\AgentProof.Cli\AgentProof.Cli.csproj" />
   </ItemGroup>
 
 </Project>

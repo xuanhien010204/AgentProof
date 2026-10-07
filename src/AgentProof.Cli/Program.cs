@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using AgentProof.Application;
 using AgentProof.Domain;
 using AgentProof.Infrastructure;
+using AgentProof.Mcp;
 
 namespace AgentProof.Cli;
 
@@ -26,6 +27,11 @@ public static class Program
         {
             PrintUsage(output);
             return 0;
+        }
+
+        if (args.Length >= 1 && args[0].Equals("mcp", StringComparison.OrdinalIgnoreCase))
+        {
+            return await McpServerHost.RunAsync(args[1..]);
         }
 
         if (args.Length < 2)
@@ -94,6 +100,7 @@ public static class Program
               agentproof recommend <repository> --task-context <task.json>
               agentproof plan <repository> --task-context <task.json>
               agentproof verify <repository> --task-context <task.json>
+              agentproof mcp
             """);
     }
 }

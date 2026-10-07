@@ -1,57 +1,115 @@
-# MCP integration
+# MCP Integration
 
-AgentProof uses the official MCP C# SDK package `ModelContextProtocol` version 2.2.0 and its stdio server transport. The implementation follows the official API:
+AgentProof implements the Model Context Protocol (MCP) using the official C# SDK package `ModelContextProtocol` version 2.2.0 and its standard `stdio` transport.
 
-```csharp
-services.AddMcpServer()
-    .WithStdioServerTransport()
-    .WithToolsFromAssembly();
-```
+Application logs are directed to `stderr` so they never interfere with JSON-RPC communication on `stdout`.
 
-Tool classes use `[McpServerToolType]`; tool methods use `[McpServerTool]`.
+## Installation and Execution
 
-## Build and executable
+### 1. Run as Installed .NET Tool (Recommended)
 
-Build a release server:
+When AgentProof is installed as a global .NET Tool:
 
 ```shell
-dotnet build src/AgentProof.Mcp/AgentProof.Mcp.csproj -c Release
+agentproof mcp
 ```
 
-Host-neutral stdio launch details:
+### 2. Run from Source / Build Output
 
-- Executable: `dotnet`
-- Arguments: the absolute path to `src/AgentProof.Mcp/bin/Release/net10.0/AgentProof.Mcp.dll`
-- Transport: stdio
-- Environment variables: none required
+Alternatively, run directly from the source repository:
 
-All protocol output goes to stdout. Application logs are directed to stderr so they do not corrupt MCP messages.
+```shell
+dotnet run --project src/AgentProof.Mcp
+```
 
-## Tools
+Or execute the compiled binary directly:
 
-| Tool | Behavior |
-|---|---|
-| `analyze_repository` | Read-only repository analysis |
-| `recommend_skills` | Deterministic recommendations from repository facts and `TaskContext` |
-| `create_verification_plan` | Safe steps based on actual solution and package scripts |
-| `verify` | Internally plans, executes approved checks, and returns evidence |
+```shell
+dotnet path/to/AgentProof.Mcp.dll
+```
 
-## Codex and Antigravity
+## Host Configuration
 
-Both hosts should launch the executable above as a local stdio MCP server. Host-specific configuration formats are intentionally marked **TODO** for V0.1: no currently verified official Codex or Antigravity configuration format was established during implementation, so this project does not publish speculative JSON or settings keys.
+### Standard MCP Configuration (`mcpServers`)
 
-After configuration, confirm that tool discovery returns exactly the four tools listed above. The integration test performs this discovery against the real server process.
+For hosts that support standard stdio MCP configuration (such as Antigravity, Claude Desktop, Cursor, and generic MCP clients):
 
-## Expected flow
+#### When installed globally as a .NET Tool:
+
+```json
+{
+  "mcpServers": {
+    "agentproof": {
+      "command": "agentproof",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+#### When running from source:
+
+```json
+{
+  "mcpServers": {
+    "agentproof": {
+      "command": "dotnet",
+      "args": ["run", "--project", "D:/project/AgentProof/src/AgentProof.Mcp"]
+    }
+  }
+}
+```
+
+### Codex and Antigravity Host Notes
+
+- **Antigravity**: Verified via stdio subprocess transport with standard tool definitions.
+- **Codex**: Launch via standard stdio command `agentproof mcp` or through the host's supported MCP client bridge.
+
+## Tool Surface
+
+AgentProof exposes exactly four tools:
+
+| Tool | Mode | Description |
+|---|---|---|
+| `analyze_repository` | Read-only | Returns repository metadata, detected technologies, frameworks, and test runners. |
+| `recommend_skills` | Read-only | Provides deterministic skill recommendations based on repository facts and `TaskContext`. |
+| `create_verification_plan` | Read-only | Generates a deterministic sequence of build, test, or lint steps based on actual project configurations. |
+| `verify` | Read/Write (Safe) | Executes the approved verification steps in their respective working directories and returns evidence and status. |
+
+AgentProof intentionally **does not** expose arbitrary command execution, code editing, shell execution, or package installation tools.
+
+## Expected Agent Workflow
 
 ```text
-Host analyzes user intent
-  → analyze_repository
-  → recommend_skills
-  → create_verification_plan
-  → host implements changes
-  → verify
-  → fix and repeat on failure
+Host receives task intent
+  ↓
+analyze_repository
+  ↓
+recommend_skills
+  ↓
+create_verification_plan
+  ↓
+Host implements code changes
+  ↓
+verify
+  ↓
+Verification Status?
+  ├─ Verified → Task complete (DONE)
+  ├─ NotVerified → Fix issues → verify again
+  └─ PartiallyVerified → Surface explicit gap to user / host
 ```
 
-The host should claim completion only when the result is `Verified`. `PartiallyVerified` identifies an explicit gap such as unavailable browser verification.
+## Verification Status Semantics
+
+- **`Verified`**: All required verification steps passed with exit code `0` and no verification gaps exist. The agent may claim task completion.
+- **`NotVerified`**: One or more required verification checks failed (e.g. build failure or failing test). The agent must inspect failure output, make fixes, and rerun verification before claiming completion.
+- **`PartiallyVerified`**: All executed steps passed, but explicit evidence gaps remain (such as requiring `Browser` evidence when Playwright is not installed, or requiring `Database` evidence without a database engine). The agent must surface the verification gap rather than falsely claiming full verification.
+
+## Common Issues & Troubleshooting
+
+1. **Process Locking during Builds**:
+   If the MCP server is actively executing within a directory being rebuilt by another process, stop the running MCP host process or allow it to finish before rebuilding.
+2. **Missing Prerequisite Runtimes**:
+   AgentProof relies on the locally installed toolchains (`dotnet`, `npm`, `pnpm`, `yarn`, `npx`). Ensure the relevant CLI tools for your repository are present in `PATH`.
+3. **Working Directory & Path Containment**:
+   All verification commands are restricted to paths within the repository root. Commands attempting directory traversal (`../`) are automatically rejected.

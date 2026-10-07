@@ -60,6 +60,7 @@ agentproof analyze .
 agentproof recommend . --task-context <task.json>
 agentproof plan . --task-context <task.json>
 agentproof verify . --task-context <task.json>
+agentproof mcp
 ```
 
 ## CLI debugging
@@ -69,6 +70,7 @@ dotnet run --project src/AgentProof.Cli -- analyze .
 dotnet run --project src/AgentProof.Cli -- recommend . --task-context task.json
 dotnet run --project src/AgentProof.Cli -- plan . --task-context task.json
 dotnet run --project src/AgentProof.Cli -- verify . --task-context task.json
+dotnet run --project src/AgentProof.Cli -- mcp
 ```
 
 Exit codes:
@@ -95,7 +97,15 @@ Example task files are available in [`docs/examples`](docs/examples). A task con
 
 ## MCP server
 
-The server uses stdio and the official `ModelContextProtocol` 2.2.0 C# SDK.
+The server uses standard stdio JSON-RPC transport and the official `ModelContextProtocol` 2.2.0 C# SDK.
+
+Launch via global tool:
+
+```shell
+agentproof mcp
+```
+
+Or run directly from source:
 
 ```shell
 dotnet run --project src/AgentProof.Mcp
@@ -112,10 +122,9 @@ The server intentionally does not expose code generation, file editing, package 
 
 ## Current limitations
 
-- Node.js verification scripts are read from a root-level `package.json`; workspace package discovery is not yet implemented.
 - Browser verification requires an existing Playwright installation and is reported as a gap otherwise.
 - Verification trusts the local repository being checked. Build and test systems can execute repository-defined hooks; see the security document.
-- V0.1 uses stdio only and has no persistence, UI, telemetry, or cloud service.
+- Stdio transport only; no persistence, UI, telemetry, or cloud service.
 
 ## License
 
