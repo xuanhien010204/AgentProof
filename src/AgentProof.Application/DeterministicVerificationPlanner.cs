@@ -18,6 +18,13 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
         if (task.HasBrowserVisibleChanges) requiredEvidence.Add(EvidenceType.Browser);
         if (task.HasDatabaseChanges) requiredEvidence.Add(EvidenceType.Database);
 
+        var browserRequirements = contract.GetEffectiveEvidenceRequirements()
+            .Concat(contract.AcceptanceCriteria.SelectMany(criterion => criterion.GetEffectiveEvidenceRequirements()))
+            .Where(requirement => requirement.Type == EvidenceType.Browser)
+            .ToList();
+        if (task.HasBrowserVisibleChanges) browserRequirements.Add(new EvidenceRequirement { Type = EvidenceType.Browser });
+        browserRequirements = browserRequirements.Distinct().ToList();
+
         var workspaces = repository.Workspaces.Count == 0
             ? await LegacyWorkspaceAsync(repository, cancellationToken)
             : repository.Workspaces;
@@ -45,14 +52,27 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
 
         if (requiredEvidence.Contains(EvidenceType.Browser))
         {
-            var playwrightWorkspace = workspaces.FirstOrDefault(x => x.Technologies.Contains("Node.js") && x.TestFrameworks.Contains("Playwright"));
-            if (playwrightWorkspace is not null)
+            var addedBrowserWorkspaces = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var requirement in browserRequirements.Where(x => x.WorkspaceId is not null))
             {
-                var workspaceRoot = Path.Combine(repository.RootPath, playwrightWorkspace.RelativePath.Replace('/', Path.DirectorySeparatorChar));
-                steps.Add(new VerificationStep(StepId(WorkspaceKey(playwrightWorkspace.Id), "playwright"), "Run Playwright browser tests", "Browser",
-                    new VerificationCommand("npx", ["--no-install", "playwright", "test"]), workspaceRoot, TimeSpan.FromMinutes(10), true, [EvidenceType.Browser], playwrightWorkspace.Id));
+                var workspace = workspaces.FirstOrDefault(x => string.Equals(x.Id, requirement.WorkspaceId, StringComparison.Ordinal));
+                if (workspace is null) continue;
+                if (!HasPlaywright(workspace))
+                {
+                    AddGap(gaps, "BROWSER_VERIFICATION_UNAVAILABLE", $"Browser verification is required for workspace '{workspace.Id}', but Playwright is not installed there. AgentProof will not install it automatically.");
+                    continue;
+                }
+
+                if (addedBrowserWorkspaces.Add(workspace.Id)) AddPlaywrightStep(steps, repository.RootPath, workspace);
             }
-            else gaps.Add(new VerificationGap("BROWSER_VERIFICATION_UNAVAILABLE", "Browser verification is required, but no workspace has Playwright installed. AgentProof will not install it automatically."));
+
+            if (browserRequirements.Any(x => x.WorkspaceId is null))
+            {
+                var workspace = workspaces.FirstOrDefault(HasPlaywright);
+                if (workspace is null)
+                    AddGap(gaps, "BROWSER_VERIFICATION_UNAVAILABLE", "Browser verification is required, but no workspace has Playwright installed. AgentProof will not install it automatically.");
+                else if (addedBrowserWorkspaces.Add(workspace.Id)) AddPlaywrightStep(steps, repository.RootPath, workspace);
+            }
         }
 
         var providedEvidence = new HashSet<EvidenceType>(steps.SelectMany(x => x.ProvidedEvidence));
@@ -83,6 +103,21 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
             (EvidenceType.Build, "MISSING_EVIDENCE_BUILD", "Build verification is required, but no build verification capability is available."),
             (EvidenceType.Tests, "MISSING_EVIDENCE_TESTS", "Test verification is required, but no test verification capability is available.")
         }) if (required.Contains(type) && !provided.Contains(type)) gaps.Add(new VerificationGap(code, reason));
+    }
+
+    private static bool HasPlaywright(RepositoryWorkspace workspace) =>
+        workspace.Technologies.Contains("Node.js") && workspace.TestFrameworks.Contains("Playwright");
+
+    private static void AddPlaywrightStep(List<VerificationStep> steps, string repositoryRoot, RepositoryWorkspace workspace)
+    {
+        var workspaceRoot = Path.Combine(repositoryRoot, workspace.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        steps.Add(new VerificationStep(StepId(WorkspaceKey(workspace.Id), "playwright"), "Run Playwright browser tests", "Browser",
+            new VerificationCommand("npx", ["--no-install", "playwright", "test"]), workspaceRoot, TimeSpan.FromMinutes(10), true, [EvidenceType.Browser], workspace.Id));
+    }
+
+    private static void AddGap(List<VerificationGap> gaps, string code, string reason)
+    {
+        if (!gaps.Any(gap => gap.Code == code && gap.Reason == reason)) gaps.Add(new VerificationGap(code, reason));
     }
 
     private static VerificationStep DotNetStep(string id, string name, string verb, IReadOnlyList<string> suffix, string root, IReadOnlyList<EvidenceType> provided, string workspaceId) =>

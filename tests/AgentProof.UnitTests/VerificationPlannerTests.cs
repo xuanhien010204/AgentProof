@@ -70,10 +70,148 @@ public sealed class VerificationPlannerTests
         Assert.DoesNotContain(plan.Gaps, x => x.Code == "BROWSER_VERIFICATION_UNAVAILABLE");
     }
 
+    [Fact]
+    public async Task PlansScopedBrowserVerificationForRequestedWorkspace()
+    {
+        using var repo = new TemporaryRepository();
+        WritePlaywrightWorkspace(repo, "frontend");
+
+        var plan = await PlanAsync(repo.Root, ScopedBrowserTask("frontend"));
+        var browser = Assert.Single(plan.Steps, x => x.ProvidedEvidence.Contains(EvidenceType.Browser));
+
+        Assert.Equal("frontend:playwright", browser.Id);
+        Assert.Equal("frontend", browser.WorkspaceId);
+        Assert.Equal(Path.Combine(repo.Root, "frontend"), browser.WorkingDirectory);
+    }
+
+    [Fact]
+    public async Task ScopedBrowserRequirementTargetsSecondPlaywrightWorkspaceOnly()
+    {
+        using var repo = new TemporaryRepository();
+        WritePlaywrightWorkspace(repo, "frontend");
+        WritePlaywrightWorkspace(repo, "admin");
+
+        var plan = await PlanAsync(repo.Root, ScopedBrowserTask("admin"));
+        var browserSteps = plan.Steps.Where(x => x.ProvidedEvidence.Contains(EvidenceType.Browser)).ToArray();
+
+        var browser = Assert.Single(browserSteps);
+        Assert.Equal("admin:playwright", browser.Id);
+        Assert.DoesNotContain(browserSteps, x => x.Id == "frontend:playwright");
+    }
+
+    [Fact]
+    public async Task MultipleScopedBrowserRequirementsCreateBothProviders()
+    {
+        using var repo = new TemporaryRepository();
+        WritePlaywrightWorkspace(repo, "frontend");
+        WritePlaywrightWorkspace(repo, "admin");
+
+        var task = new TaskContext
+        {
+            Contract = new TaskContract
+            {
+                EvidenceRequirements =
+                [
+                    new EvidenceRequirement { Type = EvidenceType.Browser, WorkspaceId = "frontend" },
+                    new EvidenceRequirement { Type = EvidenceType.Browser, WorkspaceId = "admin" }
+                ]
+            }
+        };
+        var plan = await PlanAsync(repo.Root, task);
+
+        Assert.Equal(["admin:playwright", "frontend:playwright"], plan.Steps
+            .Where(x => x.ProvidedEvidence.Contains(EvidenceType.Browser))
+            .Select(x => x.Id)
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToArray());
+    }
+
+    [Fact]
+    public async Task DuplicateScopedBrowserRequirementsCreateOneProvider()
+    {
+        using var repo = new TemporaryRepository();
+        WritePlaywrightWorkspace(repo, "admin");
+        var task = new TaskContext
+        {
+            Contract = new TaskContract
+            {
+                EvidenceRequirements =
+                [
+                    new EvidenceRequirement { Type = EvidenceType.Browser, WorkspaceId = "admin" },
+                    new EvidenceRequirement { Type = EvidenceType.Browser, WorkspaceId = "admin" }
+                ]
+            }
+        };
+
+        var plan = await PlanAsync(repo.Root, task);
+
+        Assert.Single(plan.Steps, x => x.Id == "admin:playwright");
+    }
+
+    [Fact]
+    public async Task KnownWorkspaceWithoutPlaywrightProducesWorkspaceSpecificBrowserGap()
+    {
+        using var repo = new TemporaryRepository();
+        WritePlaywrightWorkspace(repo, "frontend");
+        repo.Write("admin/package.json", "{}");
+
+        var plan = await PlanAsync(repo.Root, ScopedBrowserTask("admin"));
+
+        Assert.DoesNotContain(plan.Steps, x => x.ProvidedEvidence.Contains(EvidenceType.Browser));
+        var gap = Assert.Single(plan.Gaps, x => x.Code == "BROWSER_VERIFICATION_UNAVAILABLE");
+        Assert.Contains("admin", gap.Reason);
+    }
+
+    [Fact]
+    public async Task RootWorkspaceBrowserScopeUsesLegacyRootStepId()
+    {
+        using var repo = new TemporaryRepository();
+        WritePlaywrightWorkspace(repo, ".");
+
+        var plan = await PlanAsync(repo.Root, ScopedBrowserTask("."));
+        var browser = Assert.Single(plan.Steps, x => x.ProvidedEvidence.Contains(EvidenceType.Browser));
+
+        Assert.Equal("playwright", browser.Id);
+        Assert.Equal(".", browser.WorkspaceId);
+        Assert.Equal(repo.Root, Path.GetFullPath(browser.WorkingDirectory));
+    }
+
+    [Fact]
+    public async Task UnscopedBrowserRequirementKeepsSingleFirstPlaywrightProviderBehavior()
+    {
+        using var repo = new TemporaryRepository();
+        WritePlaywrightWorkspace(repo, "frontend");
+        WritePlaywrightWorkspace(repo, "admin");
+
+        var plan = await PlanAsync(repo.Root, new TaskContext
+        {
+            Contract = new TaskContract { RequiredEvidence = [EvidenceType.Browser] }
+        });
+
+        Assert.Single(plan.Steps, x => x.Id == "admin:playwright");
+        Assert.DoesNotContain(plan.Steps, x => x.Id == "frontend:playwright");
+    }
+
     private static async Task<VerificationPlan> PlanAsync(string root, TaskContext? task = null)
     {
         var analyzer = new LocalRepositoryAnalyzer();
         return await new DeterministicVerificationPlanner(new RepositoryConfigurationReader())
             .CreateAsync(await analyzer.AnalyzeAsync(root), task ?? new TaskContext());
+    }
+
+    private static TaskContext ScopedBrowserTask(string workspaceId) => new()
+    {
+        Contract = new TaskContract
+        {
+            EvidenceRequirements = [new EvidenceRequirement { Type = EvidenceType.Browser, WorkspaceId = workspaceId }]
+        }
+    };
+
+    private static void WritePlaywrightWorkspace(TemporaryRepository repo, string relativePath)
+    {
+        var prefix = relativePath == "." ? string.Empty : relativePath + "/";
+        repo.Write($"{prefix}package.json", "{\"devDependencies\":{\"@playwright/test\":\"1\"}}");
+        repo.Write($"{prefix}package-lock.json", "{}");
+        repo.Write($"{prefix}playwright.config.ts", "export default {};");
     }
 }

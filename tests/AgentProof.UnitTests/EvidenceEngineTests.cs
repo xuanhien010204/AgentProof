@@ -49,6 +49,16 @@ public sealed class EvidenceEngineTests
         new VerificationCommand("dotnet", ["build", "App.sln"]),
         "repo", TimeSpan.FromMinutes(5), true, [EvidenceType.Build], ".");
 
+    private static readonly VerificationStep FrontendBrowserStep = new(
+        "frontend:playwright", "Run frontend browser tests", "Browser",
+        new VerificationCommand("npx", ["--no-install", "playwright", "test"]),
+        "repo/frontend", TimeSpan.FromMinutes(10), true, [EvidenceType.Browser], "frontend");
+
+    private static readonly VerificationStep AdminBrowserStep = new(
+        "admin:playwright", "Run admin browser tests", "Browser",
+        new VerificationCommand("npx", ["--no-install", "playwright", "test"]),
+        "repo/admin", TimeSpan.FromMinutes(10), true, [EvidenceType.Browser], "admin");
+
     private readonly DeterministicEvidenceEvaluator _evaluator = new();
 
     [Fact]
@@ -457,6 +467,31 @@ public sealed class EvidenceEngineTests
         var result = _evaluator.Evaluate(contract, plan, [], []);
 
         Assert.Equal(CriterionStatus.NotEvaluated, Assert.Single(result.Criteria).Status);
+    }
+
+    [Fact]
+    public void BrowserCriterionReferencesTheCorrectWorkspacePlaywrightStep()
+    {
+        var contract = ScopedCriterion("AC-ADMIN-BROWSER", EvidenceType.Browser, "admin");
+        var plan = new VerificationPlan([FrontendBrowserStep, AdminBrowserStep], [], ["frontend", "admin"]);
+
+        var result = _evaluator.Evaluate(contract, plan, [SuccessEvidence(AdminBrowserStep)], []);
+
+        var criterion = Assert.Single(result.Criteria);
+        Assert.Equal(CriterionStatus.Passed, criterion.Status);
+        Assert.Equal(["admin:playwright"], criterion.EvidenceStepIds);
+    }
+
+    [Fact]
+    public void UnknownBrowserWorkspaceProducesDeterministicGap()
+    {
+        var contract = ScopedCriterion("AC-MOBILE-BROWSER", EvidenceType.Browser, "mobile");
+        var plan = new VerificationPlan([FrontendBrowserStep], [], ["frontend"]);
+
+        var result = _evaluator.Evaluate(contract, plan, [SuccessEvidence(FrontendBrowserStep)], []);
+
+        Assert.Equal(CriterionStatus.Gap, Assert.Single(result.Criteria).Status);
+        Assert.Contains(result.Gaps, gap => gap.Code == "MISSING_WORKSPACE_EVIDENCE_PROVIDER");
     }
 
     [Fact]
