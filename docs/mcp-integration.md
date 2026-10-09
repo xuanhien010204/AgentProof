@@ -71,12 +71,25 @@ AgentProof exposes exactly four tools:
 
 | Tool | Mode | Description |
 |---|---|---|
-| `analyze_repository` | Read-only | Returns repository metadata, detected technologies, frameworks, and test runners. |
-| `recommend_skills` | Read-only | Provides deterministic skill recommendations based on repository facts and `TaskContext`. |
-| `create_verification_plan` | Read-only | Generates a deterministic sequence of build, test, or lint steps based on actual project configurations. |
-| `verify` | Read/Write (Safe) | Executes the approved verification steps in their respective working directories and returns evidence and status. |
+| `analyze_repository` | Read-only | Returns repository metadata, detected technologies, frameworks, workspaces, and test runners (`schemaVersion: 1`). |
+| `recommend_skills` | Read-only | Provides deterministic skill recommendations based on repository facts and `TaskContext` (`schemaVersion: 1`). |
+| `create_verification_plan` | Read-only | Generates a deterministic sequence of build, test, or lint steps based on actual project configurations (`schemaVersion: 1`). |
+| `verify` | Read/Write (Safe) | Executes approved verification steps in their respective working directories and returns evidence and status. Supports `detailLevel` argument: `'compact'` (default context-efficient summary) or `'full'` (complete per-step diagnostics). |
 
 AgentProof intentionally **does not** expose arbitrary command execution, code editing, shell execution, or package installation tools.
+
+### Detail Levels and Progressive Disclosure
+
+- **`compact` (default)**: Returns a context-efficient summary (`schemaVersion: 1`). Failed and timed-out steps include explicit failure reasons and command error output summaries directly in `failedSteps`. Successful step stdout and durations are omitted to minimize context token usage.
+- **`full`**: Returns the identical verification results, summary accounting, and status, and additionally includes an `evidence` array containing complete per-step execution evidence (`status`, `exitCode`, `durationMs`, and full `outputSummary`).
+
+```text
+verify(..., detailLevel: "compact") [Default]
+  ↓ (Context-efficient summary with failure diagnostics)
+Task completed OR fix failure indicated in failedSteps
+  ↓ (Optional: inspect full execution logs)
+verify(..., detailLevel: "full")
+```
 
 ## Expected Agent Workflow
 

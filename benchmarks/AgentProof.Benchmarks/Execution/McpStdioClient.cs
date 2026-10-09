@@ -237,9 +237,12 @@ public sealed class McpStdioClient : IAsyncDisposable
             int? evidenceCount = null;
             int? gapCount = null;
             string? verificationStatus = null;
+            int? plannedStepCount = null;
+            int? executedStepCount = null;
             int? passedStepCount = null;
             int? failedStepCount = null;
             int? timedOutStepCount = null;
+            int? notRunStepCount = null;
 
             if (!string.IsNullOrWhiteSpace(toolText))
             {
@@ -248,10 +251,10 @@ public sealed class McpStdioClient : IAsyncDisposable
                     switch (toolName)
                     {
                         case "analyze_repository":
-                            var profile = JsonSerializer.Deserialize<RepositoryProfile>(toolText, JsonOptions);
+                            var profile = JsonSerializer.Deserialize<CompactRepositoryProfile>(toolText, JsonOptions);
                             if (profile != null)
                             {
-                                workspaceCount = profile.Workspaces?.Count ?? 0;
+                                workspaceCount = profile.WorkspaceCount;
                                 technologyCount = profile.Technologies?.Count ?? 0;
                                 frameworkCount = profile.Frameworks?.Count ?? 0;
                                 testFrameworkCount = profile.TestFrameworks?.Count ?? 0;
@@ -259,7 +262,7 @@ public sealed class McpStdioClient : IAsyncDisposable
                             break;
 
                         case "recommend_skills":
-                            var recs = JsonSerializer.Deserialize<List<SkillRecommendation>>(toolText, JsonOptions);
+                            var recs = JsonSerializer.Deserialize<List<CompactSkillRecommendation>>(toolText, JsonOptions);
                             if (recs != null)
                             {
                                 recommendationCount = recs.Count;
@@ -267,7 +270,7 @@ public sealed class McpStdioClient : IAsyncDisposable
                             break;
 
                         case "create_verification_plan":
-                            var plan = JsonSerializer.Deserialize<VerificationPlan>(toolText, JsonOptions);
+                            var plan = JsonSerializer.Deserialize<CompactVerificationPlan>(toolText, JsonOptions);
                             if (plan != null)
                             {
                                 workspaceCount = plan.WorkspaceIds?.Count ?? 0;
@@ -277,15 +280,18 @@ public sealed class McpStdioClient : IAsyncDisposable
                             break;
 
                         case "verify":
-                            var vResult = JsonSerializer.Deserialize<VerificationResult>(toolText, JsonOptions);
+                            var vResult = JsonSerializer.Deserialize<CompactVerificationResult>(toolText, JsonOptions);
                             if (vResult != null)
                             {
                                 verificationStatus = vResult.Status.ToString();
-                                evidenceCount = vResult.Evidence?.Count ?? 0;
+                                evidenceCount = vResult.Summary.EvidenceCount;
                                 gapCount = vResult.Gaps?.Count ?? 0;
-                                passedStepCount = vResult.Evidence?.Count(e => e.Status == VerificationStepStatus.Passed) ?? 0;
-                                failedStepCount = vResult.Evidence?.Count(e => e.Status == VerificationStepStatus.Failed) ?? 0;
-                                timedOutStepCount = vResult.Evidence?.Count(e => e.Status == VerificationStepStatus.TimedOut) ?? 0;
+                                plannedStepCount = vResult.Summary.PlannedStepCount;
+                                executedStepCount = vResult.Summary.ExecutedStepCount;
+                                passedStepCount = vResult.Summary.PassedStepCount;
+                                failedStepCount = vResult.Summary.FailedStepCount;
+                                timedOutStepCount = vResult.Summary.TimedOutStepCount;
+                                notRunStepCount = vResult.Summary.NotRunStepCount;
                             }
                             break;
                     }
@@ -308,6 +314,7 @@ public sealed class McpStdioClient : IAsyncDisposable
                 PayloadCharacters = toolChars,
                 JsonRpcPayloadBytes = rawBytes,
                 ToolResultPayloadBytes = toolBytes,
+                ToolResultText = toolText,
                 Success = !isToolError,
                 Error = isToolError ? (string.IsNullOrWhiteSpace(toolText) ? "Tool returned error." : toolText) : null,
                 WorkspaceCount = workspaceCount,
@@ -319,9 +326,12 @@ public sealed class McpStdioClient : IAsyncDisposable
                 EvidenceCount = evidenceCount,
                 GapCount = gapCount,
                 VerificationStatus = verificationStatus,
+                PlannedStepCount = plannedStepCount,
+                ExecutedStepCount = executedStepCount,
                 PassedStepCount = passedStepCount,
                 FailedStepCount = failedStepCount,
-                TimedOutStepCount = timedOutStepCount
+                TimedOutStepCount = timedOutStepCount,
+                NotRunStepCount = notRunStepCount
             };
         }
     }

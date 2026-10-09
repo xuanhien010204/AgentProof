@@ -17,6 +17,10 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
     {
         var root = NormalizeExistingDirectory(repositoryPath);
         var files = EnumerateRepositoryFiles(root, cancellationToken).ToArray();
+        var projectFiles = files.Where(x => x.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var packageFiles = files.Where(x => Path.GetFileName(x).Equals("package.json", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var projectFacts = projectFiles.ToDictionary(x => x, x => ReadProjectFacts(x, IsInspectableFile(x)), PathComparer);
+        var packageFacts = packageFiles.ToDictionary(x => x, x => IsInspectableFile(x) ? ReadPackage(x) : EmptyPackageFacts(), PathComparer);
         var technologies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var frameworks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var testFrameworks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -38,19 +42,37 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
                 var builder = GetBuilder(builders, Path.GetDirectoryName(file)!);
                 builder.Technologies.Add(".NET");
                 if (builder.DotNetEntryPoint is null || string.CompareOrdinal(name, builder.DotNetEntryPoint) < 0) builder.DotNetEntryPoint = name;
+                builder.SolutionProjectPaths.UnionWith(ReadSolutionProjectPaths(file));
             }
             else if (name.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
             {
                 technologies.Add(".NET");
-                var facts = ReadProjectFacts(file, info.Length <= MaxInspectableFileSize);
+                var facts = projectFacts[file];
                 AddFacts(frameworks, testFrameworks, facts.Frameworks, facts.Tests);
             }
             else if (name.Equals("package.json", StringComparison.OrdinalIgnoreCase) && info.Length <= MaxInspectableFileSize)
             {
                 technologies.Add("Node.js");
-                var package = ReadPackage(file);
+                var package = packageFacts[file];
                 AddFacts(frameworks, testFrameworks, package.Frameworks, package.Tests);
                 technologies.UnionWith(package.Technologies);
+            }
+            else if (name.Equals("requirements.txt", StringComparison.OrdinalIgnoreCase) || name.Equals("pyproject.toml", StringComparison.OrdinalIgnoreCase))
+            {
+                technologies.Add("Python");
+                var builder = GetBuilder(builders, Path.GetDirectoryName(file)!);
+                builder.Technologies.Add("Python");
+                if (ContainsText(file, "fastapi", info.Length <= MaxInspectableFileSize))
+                {
+                    frameworks.Add("FastAPI");
+                    builder.Frameworks.Add("FastAPI");
+                }
+            }
+            else if (name.Equals("pubspec.yaml", StringComparison.OrdinalIgnoreCase))
+            {
+                technologies.Add("Flutter");
+                var builder = GetBuilder(builders, Path.GetDirectoryName(file)!);
+                builder.Technologies.Add("Flutter");
             }
 
             if (name.Equals("package-lock.json", StringComparison.OrdinalIgnoreCase)) packageManagers.Add("npm");
@@ -65,25 +87,53 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
             { hasDocker = true; technologies.Add("Docker Compose"); }
         }
 
-        var solutionRoots = builders.Values.Where(x => x.DotNetEntryPoint is not null).Select(x => x.AbsolutePath).ToArray();
-        foreach (var file in files.Where(x => x.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)))
+        var solutionBuilders = builders.Values.Where(x => x.DotNetEntryPoint is not null).ToArray();
+        var projectsAssignedToSolution = new HashSet<string>(PathComparer);
+        foreach (var file in projectFiles)
         {
             var projectDirectory = Path.GetDirectoryName(file)!;
-            var solutionRoot = solutionRoots.Where(x => IsWithin(x, projectDirectory)).OrderByDescending(x => x.Length).FirstOrDefault();
-            var builder = GetBuilder(builders, solutionRoot ?? projectDirectory);
-            builder.Technologies.Add(".NET");
-            var facts = ReadProjectFacts(file, new FileInfo(file).Length <= MaxInspectableFileSize);
-            AddFacts(builder.Frameworks, builder.TestFrameworks, facts.Frameworks, facts.Tests);
+            var normalizedProjectPath = NormalizePath(file);
+            var matchingSolutions = solutionBuilders
+                .Where(x => x.SolutionProjectPaths.Contains(normalizedProjectPath))
+                .ToArray();
+
+            // A malformed or project-less solution still establishes a local boundary.
+            // Only use the physical containment fallback when no project membership was parsed.
+            if (matchingSolutions.Length == 0)
+            {
+                matchingSolutions = solutionBuilders
+                    .Where(x => x.SolutionProjectPaths.Count == 0 && IsWithin(x.AbsolutePath, projectDirectory))
+                    .OrderByDescending(x => x.AbsolutePath.Length)
+                    .Take(1)
+                    .ToArray();
+            }
+
+            if (matchingSolutions.Length == 0) continue;
+
+            projectsAssignedToSolution.Add(file);
+            foreach (var builder in matchingSolutions)
+                builder.AddProjectFacts(projectFacts[file]);
         }
 
-        foreach (var file in files.Where(x => Path.GetFileName(x).Equals("package.json", StringComparison.OrdinalIgnoreCase)))
+        var standaloneProjects = projectFiles.Where(x => !projectsAssignedToSolution.Contains(x)).ToArray();
+        foreach (var component in FindProjectComponents(standaloneProjects, projectFacts))
+        {
+            var entryPoint = SelectProjectEntryPoint(component, projectFacts);
+            var workspaceRoot = Path.GetDirectoryName(entryPoint)!;
+            var builder = GetBuilder(builders, workspaceRoot);
+            builder.Technologies.Add(".NET");
+            builder.DotNetEntryPoint ??= Path.GetRelativePath(workspaceRoot, entryPoint);
+            foreach (var project in component) builder.AddProjectFacts(projectFacts[project]);
+        }
+
+        foreach (var file in packageFiles)
         {
             var directory = Path.GetDirectoryName(file)!;
             var builder = GetBuilder(builders, directory);
             builder.Technologies.Add("Node.js");
-            if (new FileInfo(file).Length <= MaxInspectableFileSize)
+            if (IsInspectableFile(file))
             {
-                var package = ReadPackage(file);
+                var package = packageFacts[file];
                 AddFacts(builder.Frameworks, builder.TestFrameworks, package.Frameworks, package.Tests);
                 builder.Technologies.UnionWith(package.Technologies);
                 foreach (var script in package.Scripts) builder.PackageScripts[script.Key] = script.Value;
@@ -120,8 +170,16 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
             try { files = Directory.EnumerateFiles(directory); directories = Directory.EnumerateDirectories(directory); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
             foreach (var file in files) yield return file;
-            foreach (var child in directories) if (!IgnoredDirectories.Contains(Path.GetFileName(child))) pending.Push(child);
+            foreach (var child in directories)
+                if (!ShouldIgnoreDirectory(root, child)) pending.Push(child);
         }
+    }
+
+    private static bool ShouldIgnoreDirectory(string root, string directory)
+    {
+        var name = Path.GetFileName(directory);
+        return IgnoredDirectories.Contains(name) ||
+            (name.Length > 0 && name[0] == '.' && !directory.Equals(root, PathComparison));
     }
 
     private static WorkspaceBuilder GetBuilder(Dictionary<string, WorkspaceBuilder> builders, string path)
@@ -139,10 +197,11 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
         return null;
     }
 
-    private static (HashSet<string> Frameworks, HashSet<string> Tests) ReadProjectFacts(string path, bool inspect)
+    private static ProjectFacts ReadProjectFacts(string path, bool inspect)
     {
         var frameworks = new HashSet<string>(StringComparer.OrdinalIgnoreCase); var tests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (!inspect) return (frameworks, tests);
+        var projectReferences = new HashSet<string>(PathComparer);
+        if (!inspect) return new ProjectFacts(frameworks, tests, projectReferences);
         try
         {
             var document = XDocument.Load(path, LoadOptions.None);
@@ -155,9 +214,119 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
                 if (package.StartsWith("NUnit", StringComparison.OrdinalIgnoreCase)) tests.Add("NUnit");
                 if (package.StartsWith("MSTest", StringComparison.OrdinalIgnoreCase)) tests.Add("MSTest");
             }
+
+            foreach (var reference in document.Descendants().Where(x => x.Name.LocalName == "ProjectReference"))
+            {
+                var include = reference.Attribute("Include")?.Value ?? reference.Attribute("Update")?.Value;
+                var resolved = ResolveReferencedProjectPath(path, include);
+                if (resolved is not null) projectReferences.Add(resolved);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException) { }
-        return (frameworks, tests);
+        return new ProjectFacts(frameworks, tests, projectReferences);
+    }
+
+    private static HashSet<string> ReadSolutionProjectPaths(string path)
+    {
+        var projects = new HashSet<string>(PathComparer);
+        try
+        {
+            if (path.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
+            {
+                var document = XDocument.Load(path, LoadOptions.None);
+                foreach (var project in document.Descendants().Where(x => x.Name.LocalName == "Project"))
+                    AddResolvedProjectPath(projects, path, project.Attribute("Path")?.Value);
+            }
+            else
+            {
+                foreach (var line in File.ReadLines(path))
+                {
+                    var quoted = line.Split('"');
+                    if (quoted.Length > 5 && quoted[0].TrimStart().StartsWith("Project(", StringComparison.Ordinal))
+                        AddResolvedProjectPath(projects, path, quoted[5]);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException) { }
+        return projects;
+    }
+
+    private static void AddResolvedProjectPath(HashSet<string> projects, string sourcePath, string? relativePath)
+    {
+        var resolved = ResolveReferencedProjectPath(sourcePath, relativePath);
+        if (resolved is not null && resolved.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)) projects.Add(resolved);
+    }
+
+    private static string? ResolveReferencedProjectPath(string sourcePath, string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath)) return null;
+        try
+        {
+            var directory = Path.GetDirectoryName(sourcePath) ?? string.Empty;
+            return NormalizePath(Path.Combine(directory, relativePath));
+        }
+        catch (ArgumentException) { return null; }
+    }
+
+    private static List<IReadOnlyList<string>> FindProjectComponents(
+        IReadOnlyList<string> projects,
+        IReadOnlyDictionary<string, ProjectFacts> projectFacts)
+    {
+        var projectSet = projects.ToHashSet(PathComparer);
+        var adjacency = projects.ToDictionary(project => project, _ => new HashSet<string>(PathComparer), PathComparer);
+        foreach (var project in projects)
+        {
+            foreach (var reference in projectFacts[project].ProjectReferences.Where(projectSet.Contains))
+            {
+                adjacency[project].Add(reference);
+                adjacency[reference].Add(project);
+            }
+        }
+
+        var components = new List<IReadOnlyList<string>>();
+        var visited = new HashSet<string>(PathComparer);
+        foreach (var project in projects.OrderBy(x => x, PathComparer))
+        {
+            if (!visited.Add(project)) continue;
+            var component = new List<string>();
+            var pending = new Stack<string>();
+            pending.Push(project);
+            while (pending.Count > 0)
+            {
+                var current = pending.Pop();
+                component.Add(current);
+                foreach (var reference in adjacency[current].OrderBy(x => x, PathComparer))
+                    if (visited.Add(reference)) pending.Push(reference);
+            }
+            components.Add(component.OrderBy(x => x, PathComparer).ToArray());
+        }
+        return components;
+    }
+
+    private static string SelectProjectEntryPoint(
+        IReadOnlyList<string> component,
+        IReadOnlyDictionary<string, ProjectFacts> projectFacts)
+    {
+        var componentSet = component.ToHashSet(PathComparer);
+        var referencedProjects = component
+            .SelectMany(project => projectFacts[project].ProjectReferences)
+            .Where(componentSet.Contains)
+            .ToHashSet(PathComparer);
+        return component.Where(project => !referencedProjects.Contains(project)).OrderBy(x => x, PathComparer).FirstOrDefault()
+            ?? component.OrderBy(x => x, PathComparer).First();
+    }
+
+    private static bool IsInspectableFile(string path)
+    {
+        try { return new FileInfo(path).Length <= MaxInspectableFileSize; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+    }
+
+    private static bool ContainsText(string path, string value, bool inspect)
+    {
+        if (!inspect) return false;
+        try { return File.ReadAllText(path).Contains(value, StringComparison.OrdinalIgnoreCase); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
     }
 
     private static PackageFacts ReadPackage(string path)
@@ -190,6 +359,7 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
     }
 
     private static void AddFacts(HashSet<string> frameworks, HashSet<string> tests, IEnumerable<string> newFrameworks, IEnumerable<string> newTests) { frameworks.UnionWith(newFrameworks); tests.UnionWith(newTests); }
+    private static string NormalizePath(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
     private static bool IsWithin(string parent, string child) => child.Equals(parent, PathComparison) || child.StartsWith(Path.TrimEndingDirectorySeparator(parent) + Path.DirectorySeparatorChar, PathComparison);
     private static StringComparison PathComparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
     private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
@@ -202,8 +372,10 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
         public HashSet<string> Frameworks { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> TestFrameworks { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, string> PackageScripts { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> SolutionProjectPaths { get; } = new(PathComparer);
         public string? PackageManager { get; set; }
         public string? DotNetEntryPoint { get; set; }
+        public void AddProjectFacts(ProjectFacts facts) => AddFacts(Frameworks, TestFrameworks, facts.Frameworks, facts.Tests);
         public RepositoryWorkspace ToWorkspace(string root)
         {
             var relative = Path.GetRelativePath(root, AbsolutePath).Replace(Path.DirectorySeparatorChar, '/');
@@ -212,4 +384,11 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
         }
     }
     private sealed record PackageFacts(HashSet<string> Frameworks, HashSet<string> Tests, HashSet<string> Technologies, Dictionary<string, string> Scripts);
+    private sealed record ProjectFacts(HashSet<string> Frameworks, HashSet<string> Tests, HashSet<string> ProjectReferences);
+
+    private static PackageFacts EmptyPackageFacts() => new(
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
 }

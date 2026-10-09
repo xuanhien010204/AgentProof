@@ -24,6 +24,7 @@ public sealed record BenchmarkOperationResult
     public int PayloadCharacters { get; init; }
     public long JsonRpcPayloadBytes { get; init; }
     public long ToolResultPayloadBytes { get; init; }
+    public string ToolResultText { get; init; } = string.Empty;
     public bool Success { get; init; } = true;
     public string? Error { get; init; }
 
@@ -37,9 +38,12 @@ public sealed record BenchmarkOperationResult
     public int? EvidenceCount { get; init; }
     public int? GapCount { get; init; }
     public string? VerificationStatus { get; init; }
+    public int? PlannedStepCount { get; init; }
+    public int? ExecutedStepCount { get; init; }
     public int? PassedStepCount { get; init; }
     public int? FailedStepCount { get; init; }
     public int? TimedOutStepCount { get; init; }
+    public int? NotRunStepCount { get; init; }
 }
 
 public sealed record BenchmarkOperationSummary
@@ -67,9 +71,12 @@ public sealed record BenchmarkOperationSummary
     public int? EvidenceCount { get; init; }
     public int? GapCount { get; init; }
     public string? VerificationStatus { get; init; }
+    public int? PlannedStepCount { get; init; }
+    public int? ExecutedStepCount { get; init; }
     public int? PassedStepCount { get; init; }
     public int? FailedStepCount { get; init; }
     public int? TimedOutStepCount { get; init; }
+    public int? NotRunStepCount { get; init; }
 
     public IReadOnlyList<BenchmarkOperationResult> IterationRuns { get; init; } = [];
 }

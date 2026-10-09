@@ -85,9 +85,12 @@ public sealed class BenchmarkRunner
                 EvidenceCount = representative.EvidenceCount,
                 GapCount = representative.GapCount,
                 VerificationStatus = representative.VerificationStatus,
+                PlannedStepCount = representative.PlannedStepCount,
+                ExecutedStepCount = representative.ExecutedStepCount,
                 PassedStepCount = representative.PassedStepCount,
                 FailedStepCount = representative.FailedStepCount,
                 TimedOutStepCount = representative.TimedOutStepCount,
+                NotRunStepCount = representative.NotRunStepCount,
                 IterationRuns = opRuns
             });
         }

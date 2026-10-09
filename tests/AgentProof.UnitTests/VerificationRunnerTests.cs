@@ -216,6 +216,92 @@ public sealed class VerificationRunnerTests
         Assert.Contains("api_key=[REDACTED]", evidence.OutputSummary);
     }
 
+    [Fact]
+    public async Task RunAsyncWhenRequiredStepFailsRemainingStepsAreReportedAsNotRun()
+    {
+        using var repo = MinimalProject(valid: false);
+        var step1 = new VerificationStep("step-1-fail", "Step 1", ".NET",
+            new VerificationCommand("dotnet", ["build", "Test.csproj"]), repo.Root, TimeSpan.FromMinutes(1), true);
+        var step2 = new VerificationStep("step-2-skip", "Step 2", ".NET",
+            new VerificationCommand("dotnet", ["test", "Test.csproj"]), repo.Root, TimeSpan.FromMinutes(1), true);
+        var step3 = new VerificationStep("step-3-skip", "Step 3", ".NET",
+            new VerificationCommand("dotnet", ["test", "Test.csproj"]), repo.Root, TimeSpan.FromMinutes(1), false);
+
+        var result = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([step1, step2, step3], []));
+
+        Assert.Equal(3, result.Evidence.Count);
+        Assert.Equal(VerificationStepStatus.Failed, result.Evidence[0].Status);
+        Assert.Equal(VerificationStepStatus.NotRun, result.Evidence[1].Status);
+        Assert.Equal("Not run because a prior required verification step did not pass.", result.Evidence[1].FailureReason);
+        Assert.Equal(VerificationStepStatus.NotRun, result.Evidence[2].Status);
+        Assert.Equal("Not run because a prior required verification step did not pass.", result.Evidence[2].FailureReason);
+    }
+
+    [Fact]
+    public async Task RunAsyncWhenRequiredStepTimesOutRemainingStepsAreReportedAsNotRun()
+    {
+        using var repo = MinimalProject(valid: true);
+        var step1 = new VerificationStep("step-1-timeout", "Step 1", ".NET",
+            new VerificationCommand("dotnet", ["build", "Test.csproj"]), repo.Root, TimeSpan.Zero, true);
+        var step2 = new VerificationStep("step-2-skip", "Step 2", ".NET",
+            new VerificationCommand("dotnet", ["test", "Test.csproj"]), repo.Root, TimeSpan.FromMinutes(1), true);
+
+        var result = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([step1, step2], []));
+
+        Assert.Equal(2, result.Evidence.Count);
+        Assert.Equal(VerificationStepStatus.TimedOut, result.Evidence[0].Status);
+        Assert.Equal(VerificationStepStatus.NotRun, result.Evidence[1].Status);
+        Assert.Equal("Not run because a prior required verification step did not pass.", result.Evidence[1].FailureReason);
+    }
+
+    [Fact]
+    public async Task ExecuteAsyncWhenProcessTimesOutTerminatesEntireProcessTree()
+    {
+        using var repo = MinimalProject(valid: true);
+        int capturedPid = 0;
+        var runner = new SafeVerificationRunner
+        {
+            ProcessStartedForTesting = p => capturedPid = p.Id
+        };
+        var step = new VerificationStep("build", "Build", ".NET",
+            new VerificationCommand("dotnet", ["build", "Test.csproj"]), repo.Root, TimeSpan.Zero, true);
+
+        var result = await runner.RunAsync(repo.Root, new VerificationPlan([step], []));
+
+        Assert.Equal(VerificationStepStatus.TimedOut, Assert.Single(result.Evidence).Status);
+        Assert.True(capturedPid > 0);
+        Assert.True(IsProcessTerminated(capturedPid));
+    }
+
+    [Fact]
+    public async Task EvidenceAccountingPlannedStepsEqualsPassedPlusFailedPlusTimedOutPlusNotRun()
+    {
+        using var repo = MinimalProject(valid: false);
+        var step1 = new VerificationStep("step-1-fail", "Step 1", ".NET",
+            new VerificationCommand("dotnet", ["build", "Test.csproj"]), repo.Root, TimeSpan.FromMinutes(1), true);
+        var step2 = new VerificationStep("step-2-skip", "Step 2", ".NET",
+            new VerificationCommand("dotnet", ["test", "Test.csproj"]), repo.Root, TimeSpan.FromMinutes(1), true);
+        var step3 = new VerificationStep("step-3-skip", "Step 3", ".NET",
+            new VerificationCommand("dotnet", ["test", "Test.csproj"]), repo.Root, TimeSpan.FromMinutes(1), true);
+
+        var plan = new VerificationPlan([step1, step2, step3], []);
+        var result = await new SafeVerificationRunner().RunAsync(repo.Root, plan);
+
+        var plannedCount = plan.Steps.Count;
+        var passedCount = result.Evidence.Count(e => e.Status == VerificationStepStatus.Passed);
+        var failedCount = result.Evidence.Count(e => e.Status == VerificationStepStatus.Failed);
+        var timedOutCount = result.Evidence.Count(e => e.Status == VerificationStepStatus.TimedOut);
+        var notRunCount = result.Evidence.Count(e => e.Status == VerificationStepStatus.NotRun);
+
+        Assert.Equal(3, plannedCount);
+        Assert.Equal(0, passedCount);
+        Assert.Equal(1, failedCount);
+        Assert.Equal(0, timedOutCount);
+        Assert.Equal(2, notRunCount);
+        Assert.Equal(plannedCount, passedCount + failedCount + timedOutCount + notRunCount);
+        Assert.Equal(plannedCount, result.Evidence.Count);
+    }
+
     private static TemporaryRepository MinimalProject(bool valid)
     {
         var repo = new TemporaryRepository();

@@ -23,11 +23,26 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
         if (plan.Steps.Count == 0)
             gaps.Add(new VerificationGap("NO_VERIFICATION_STEPS", "No safe verification steps could be generated for this repository."));
 
-        foreach (var step in plan.Steps)
+        for (var i = 0; i < plan.Steps.Count; i++)
         {
+            var step = plan.Steps[i];
             cancellationToken.ThrowIfCancellationRequested();
-            evidence.Add(await ExecuteAsync(root, step, cancellationToken));
-            if (evidence[^1].Status != VerificationStepStatus.Passed && step.Required) break;
+            var stepEvidence = await ExecuteAsync(root, step, cancellationToken);
+            evidence.Add(stepEvidence);
+            if (stepEvidence.Status != VerificationStepStatus.Passed && step.Required)
+            {
+                for (var j = i + 1; j < plan.Steps.Count; j++)
+                {
+                    evidence.Add(new VerificationEvidence(
+                        plan.Steps[j],
+                        VerificationStepStatus.NotRun,
+                        null,
+                        TimeSpan.Zero,
+                        string.Empty,
+                        "Not run because a prior required verification step did not pass."));
+                }
+                break;
+            }
         }
 
         return new VerificationExecutionResult(evidence, gaps);
@@ -48,14 +63,15 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
 
             using var process = new Process { StartInfo = startInfo };
             if (!process.Start()) throw new InvalidOperationException("The verification process could not be started.");
+            try { process.StandardInput.Close(); } catch { }
 
             try
             {
                 ProcessStartedForTesting?.Invoke(process);
-                var stdout = CaptureAsync(process.StandardOutput);
-                var stderr = CaptureAsync(process.StandardError);
                 using var timeout = new CancellationTokenSource(step.Timeout);
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+                var stdout = CaptureAsync(process.StandardOutput, linked.Token);
+                var stderr = CaptureAsync(process.StandardError, linked.Token);
                 try
                 {
                     await process.WaitForExitAsync(linked.Token);
@@ -104,6 +120,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
             FileName = command.Executable,
             WorkingDirectory = workingDirectory,
             UseShellExecute = false,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true
@@ -114,12 +131,8 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
             var launcher = ResolveWindowsNodeLauncher(command.Executable);
             if (launcher is not null)
             {
-                startInfo.FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe");
-                var commandLine = string.Join(' ', new[] { launcher }.Concat(command.Arguments).Select(QuoteWindowsArgument));
-                // ProcessStartInfo.ArgumentList escapes embedded quotes for cmd.exe. Use the
-                // raw command-line property only after validation, with a fixed /d /s /c prefix
-                // and arguments assembled exclusively from the allowlisted command.
-                startInfo.Arguments = $"/d /s /c \"{commandLine}\"";
+                startInfo.FileName = launcher;
+                foreach (var argument in command.Arguments) startInfo.ArgumentList.Add(argument);
                 return startInfo;
             }
         }
@@ -197,16 +210,20 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
         if (!path.StartsWith(prefix, comparison)) throw new InvalidOperationException("Verification target escapes the repository root.");
     }
 
-    private static async Task<string> CaptureAsync(StreamReader reader)
+    private static async Task<string> CaptureAsync(StreamReader reader, CancellationToken cancellationToken = default)
     {
         var builder = new StringBuilder(Math.Min(OutputLimit, 4096));
         var buffer = new char[2048];
         int read;
-        while ((read = await reader.ReadAsync(buffer)) > 0)
+        try
         {
-            var remaining = OutputLimit - builder.Length;
-            if (remaining > 0) builder.Append(buffer, 0, Math.Min(read, remaining));
+            while ((read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken)) > 0)
+            {
+                var remaining = OutputLimit - builder.Length;
+                if (remaining > 0) builder.Append(buffer, 0, Math.Min(read, remaining));
+            }
         }
+        catch (OperationCanceledException) { }
         if (builder.Length == OutputLimit) builder.AppendLine().Append("[output truncated]");
         return builder.ToString();
     }
