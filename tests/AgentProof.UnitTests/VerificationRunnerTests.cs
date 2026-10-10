@@ -611,6 +611,217 @@ public sealed class VerificationRunnerTests
         Assert.Equal("No tests were executed (zero tests discovered or executed).", ev.FailureReason);
     }
 
+    [Theory]
+    [InlineData("Passed: 5, Failed: 0")]
+    [InlineData("All tests passed successfully")]
+    [InlineData("Ran 10 tests, 0 failures")]
+    [InlineData("test suite completed with 0 errors")]
+    public void DotNetGenericStdoutStringIsRejected(string genericStdout)
+    {
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test", "Tests.csproj"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, genericStdout, string.Empty, out var reason);
+
+        Assert.False(result);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", reason);
+    }
+
+    [Fact]
+    public void DotNetUnrelatedJsonReportIsIgnored()
+    {
+        using var repo = new TemporaryRepository();
+        repo.Write("test-report.json", """
+            {
+              "numTotalTests": 15,
+              "numPassedTests": 15,
+              "numFailedTests": 0
+            }
+            """);
+
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, "Generic build finished", string.Empty, out var reason, repo.Root, DateTime.UtcNow.AddMinutes(-1));
+
+        Assert.False(result);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", reason);
+    }
+
+    [Fact]
+    public void NodeUnrelatedTrxReportIsIgnored()
+    {
+        using var repo = new TemporaryRepository();
+        var trxPath = Path.Combine(repo.Root, "TestResults", "results.trx");
+        Directory.CreateDirectory(Path.GetDirectoryName(trxPath)!);
+        File.WriteAllText(trxPath, """
+            <?xml version="1.0" encoding="utf-8"?>
+            <TestRun id="1" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <ResultSummary outcome="Completed">
+                <Counters total="10" executed="10" passed="10" failed="0" />
+              </ResultSummary>
+            </TestRun>
+            """);
+
+        var step = new VerificationStep("test", "Test", "Node",
+            new VerificationCommand("npm", ["test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, "Generic npm finished", string.Empty, out var reason, repo.Root, DateTime.UtcNow.AddMinutes(-1));
+
+        Assert.False(result);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", reason);
+    }
+
+    [Fact]
+    public void UnrelatedNestedSubdirectoryReportIsIgnored()
+    {
+        using var repo = new TemporaryRepository();
+        var deepPath = Path.Combine(repo.Root, "nested", "fixtures", "subfolder", "results.trx");
+        Directory.CreateDirectory(Path.GetDirectoryName(deepPath)!);
+        File.WriteAllText(deepPath, """
+            <?xml version="1.0" encoding="utf-8"?>
+            <TestRun id="1" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <ResultSummary outcome="Completed">
+                <Counters total="10" executed="10" passed="10" failed="0" />
+              </ResultSummary>
+            </TestRun>
+            """);
+
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, "Unrecognized stdout", string.Empty, out var reason, repo.Root, DateTime.UtcNow.AddMinutes(-1));
+
+        Assert.False(result);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", reason);
+    }
+
+    [Fact]
+    public void FabricatedJsonReportWithoutCountersFailsClosed()
+    {
+        using var repo = new TemporaryRepository();
+        repo.Write("test-report.json", """{"status": "ok", "arbitrary": 123}""");
+
+        var step = new VerificationStep("test", "Test", "Node",
+            new VerificationCommand("npm", ["test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, "Custom runner finished", string.Empty, out var reason, repo.Root, DateTime.UtcNow.AddMinutes(-1));
+
+        Assert.False(result);
+        Assert.Equal("Test report artifact is malformed or could not be parsed.", reason);
+    }
+
+    [Fact]
+    public void FabricatedTrxReportWithoutCountersFailsClosed()
+    {
+        using var repo = new TemporaryRepository();
+        var trxPath = Path.Combine(repo.Root, "TestResults", "results.trx");
+        Directory.CreateDirectory(Path.GetDirectoryName(trxPath)!);
+        File.WriteAllText(trxPath, """
+            <?xml version="1.0" encoding="utf-8"?>
+            <TestRun id="1" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <ResultSummary outcome="Completed">
+                <Empty />
+              </ResultSummary>
+            </TestRun>
+            """);
+
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, "Custom runner finished", string.Empty, out var reason, repo.Root, DateTime.UtcNow.AddMinutes(-1));
+
+        Assert.False(result);
+        Assert.Equal("Test report artifact is malformed or could not be parsed.", reason);
+    }
+
+    [Fact]
+    public void ReportWithZeroTestsTotalFailsClosed()
+    {
+        using var repo = new TemporaryRepository();
+        var trxPath = Path.Combine(repo.Root, "TestResults", "results.trx");
+        Directory.CreateDirectory(Path.GetDirectoryName(trxPath)!);
+        File.WriteAllText(trxPath, """
+            <?xml version="1.0" encoding="utf-8"?>
+            <TestRun id="1" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <ResultSummary outcome="Completed">
+                <Counters total="0" executed="0" passed="0" failed="0" />
+              </ResultSummary>
+            </TestRun>
+            """);
+
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, "Custom runner finished", string.Empty, out var reason, repo.Root, DateTime.UtcNow.AddMinutes(-1));
+
+        Assert.False(result);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", reason);
+    }
+
+    [Fact]
+    public void NodeFakeTapEchoWithoutHeaderIsRejected()
+    {
+        var step = new VerificationStep("test", "Test", "Node",
+            new VerificationCommand("npm", ["run", "test"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var stdout = "# tests 5\n# pass 5\n# fail 0\n";
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, stdout, string.Empty, out var reason);
+
+        Assert.False(result);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", reason);
+    }
+
+    [Fact]
+    public void IsolatedArtifactDirectoryTakesPrecedenceOverStaleDirectoryReports()
+    {
+        using var repo = new TemporaryRepository();
+        var staleTrx = Path.Combine(repo.Root, "TestResults", "results.trx");
+        Directory.CreateDirectory(Path.GetDirectoryName(staleTrx)!);
+        File.WriteAllText(staleTrx, """
+            <?xml version="1.0" encoding="utf-8"?>
+            <TestRun id="1" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <ResultSummary outcome="Failed">
+                <Counters total="1" executed="1" passed="0" failed="1" />
+              </ResultSummary>
+            </TestRun>
+            """);
+
+        var isolatedDir = Path.Combine(Path.GetTempPath(), "AgentProofTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(isolatedDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(isolatedDir, "isolated.trx"), """
+                <?xml version="1.0" encoding="utf-8"?>
+                <TestRun id="1" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+                  <ResultSummary outcome="Completed">
+                    <Counters total="5" executed="5" passed="5" failed="0" />
+                  </ResultSummary>
+                </TestRun>
+                """);
+
+            var step = new VerificationStep("test", "Test", ".NET",
+                new VerificationCommand("dotnet", ["test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+            var result = SafeVerificationRunner.HasTestExecutionAssurance(step, "stdout", string.Empty, out var reason,
+                repo.Root, DateTime.UtcNow.AddMinutes(-1), isolatedDir);
+
+            Assert.True(result);
+            Assert.Null(reason);
+        }
+        finally
+        {
+            if (Directory.Exists(isolatedDir)) Directory.Delete(isolatedDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsyncWhenDotNetProjectHasZeroTestsFailsWithNoTestsExecuted()
+    {
+        using var repo = MinimalProject(valid: true);
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test", "Test.csproj"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+
+        var result = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([step], []));
+
+        var evidence = Assert.Single(result.Evidence);
+        Assert.Equal(VerificationStepStatus.Failed, evidence.Status);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", evidence.FailureReason);
+    }
+
     private static TemporaryRepository MinimalProject(bool valid)
     {
         var repo = new TemporaryRepository();

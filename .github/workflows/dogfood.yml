@@ -54,21 +54,59 @@ jobs:
         with:
           node-version: 22
 
-      - name: Provision EducationCMS Repository Structure
+      - name: Validate Authentication Secrets
         shell: pwsh
         run: |
+          $token = "${{ secrets.DOGFOOD_READ_TOKEN || secrets.DOGFOOD_GITHUB_TOKEN }}"
+          if ([string]::IsNullOrWhiteSpace($token)) {
+            Write-Error "Required authentication token (DOGFOOD_READ_TOKEN or DOGFOOD_GITHUB_TOKEN) is not configured in repository secrets. Private dogfood repositories cannot be checked out."
+            exit 1
+          }
+
+      - name: Provision EducationCMS Repository Structure
+        shell: pwsh
+        env:
+          DOGFOOD_READ_TOKEN: ${{ secrets.DOGFOOD_READ_TOKEN || secrets.DOGFOOD_GITHUB_TOKEN }}
+        run: |
+          $token = $env:DOGFOOD_READ_TOKEN
+          if ([string]::IsNullOrWhiteSpace($token)) {
+            Write-Error "DOGFOOD_READ_TOKEN secret is not set in environment."
+            exit 1
+          }
+          $authHeader = "http.extraheader=Authorization: Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$token"))
+
           $eduRoot = "$env:RUNNER_TEMP\dogfood\EducationCMS"
           New-Item -ItemType Directory -Path "$eduRoot" -Force | Out-Null
           
           Write-Host "Checking out EducationCMS backend..."
-          git clone https://github.com/xuanhien010204/education-cms-backend.git "$eduRoot\backend"
+          git -c $authHeader clone --no-tags --quiet https://github.com/xuanhien010204/education-cms-backend.git "$eduRoot\backend"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to clone private repository education-cms-backend. Verify DOGFOOD_READ_TOKEN permissions."
+            exit 1
+          }
           git -C "$eduRoot\backend" checkout ${{ inputs.education_backend_ref || '9a20f7a820a0fcf2df6b561b13e4b3eda1e5a027' }}
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to checkout pinned revision for education-cms-backend."
+            exit 1
+          }
           $backendSha = (git -C "$eduRoot\backend" rev-parse HEAD).Trim()
           
           Write-Host "Checking out EducationCMS frontend..."
-          git clone https://github.com/xuanhien010204/education-cms-frontend.git "$eduRoot\frontend"
+          git -c $authHeader clone --no-tags --quiet https://github.com/xuanhien010204/education-cms-frontend.git "$eduRoot\frontend"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to clone private repository education-cms-frontend. Verify DOGFOOD_READ_TOKEN permissions."
+            exit 1
+          }
           git -C "$eduRoot\frontend" checkout ${{ inputs.education_frontend_ref || '9cf60146589d7437e2749e979a96b78873967586' }}
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to checkout pinned revision for education-cms-frontend."
+            exit 1
+          }
           $frontendSha = (git -C "$eduRoot\frontend" rev-parse HEAD).Trim()
+
+          # Clear auth variables from memory
+          $authHeader = $null
+          $token = $null
 
           $slnxContent = @"
           <Solution>
@@ -114,29 +152,74 @@ jobs:
 
       - name: Provision ASRP Repository Structure
         shell: pwsh
+        env:
+          DOGFOOD_READ_TOKEN: ${{ secrets.DOGFOOD_READ_TOKEN || secrets.DOGFOOD_GITHUB_TOKEN }}
         run: |
+          $token = $env:DOGFOOD_READ_TOKEN
+          if ([string]::IsNullOrWhiteSpace($token)) {
+            Write-Error "DOGFOOD_READ_TOKEN secret is not set in environment."
+            exit 1
+          }
+          $authHeader = "http.extraheader=Authorization: Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$token"))
+
           $asrpRoot = "$env:RUNNER_TEMP\dogfood\ASRP"
           New-Item -ItemType Directory -Path "$asrpRoot" -Force | Out-Null
 
           Write-Host "Checking out ASRP backend..."
-          git clone https://github.com/asrp-ecosystem/asrp-backend.git "$asrpRoot\ASRP"
+          git -c $authHeader clone --no-tags --quiet https://github.com/asrp-ecosystem/asrp-backend.git "$asrpRoot\ASRP"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to clone private repository asrp-backend. Verify DOGFOOD_READ_TOKEN permissions."
+            exit 1
+          }
           git -C "$asrpRoot\ASRP" checkout ${{ inputs.asrp_backend_ref || '53a1fa78306cb9a9c623b23b4695f2ae50b0206b' }}
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to checkout pinned revision for asrp-backend."
+            exit 1
+          }
           $asrpBackendSha = (git -C "$asrpRoot\ASRP" rev-parse HEAD).Trim()
 
           Write-Host "Checking out ASRP frontend..."
-          git clone https://github.com/asrp-ecosystem/asrp-frontend.git "$asrpRoot\fe_asrp"
+          git -c $authHeader clone --no-tags --quiet https://github.com/asrp-ecosystem/asrp-frontend.git "$asrpRoot\fe_asrp"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to clone private repository asrp-frontend. Verify DOGFOOD_READ_TOKEN permissions."
+            exit 1
+          }
           git -C "$asrpRoot\fe_asrp" checkout ${{ inputs.asrp_frontend_ref || 'bfa250c711d2cd4ef70863f45bb8b21e02788d0f' }}
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to checkout pinned revision for asrp-frontend."
+            exit 1
+          }
           $asrpFrontendSha = (git -C "$asrpRoot\fe_asrp" rev-parse HEAD).Trim()
 
           Write-Host "Checking out ASRP AI Service..."
-          git clone https://github.com/asrp-ecosystem/asrp-ai-service.git "$asrpRoot\ai-service"
+          git -c $authHeader clone --no-tags --quiet https://github.com/asrp-ecosystem/asrp-ai-service.git "$asrpRoot\ai-service"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to clone private repository asrp-ai-service. Verify DOGFOOD_READ_TOKEN permissions."
+            exit 1
+          }
           git -C "$asrpRoot\ai-service" checkout ${{ inputs.asrp_ai_ref || 'd716f2243faf9cfff66699ff6869960167ad2275' }}
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to checkout pinned revision for asrp-ai-service."
+            exit 1
+          }
           $asrpAiSha = (git -C "$asrpRoot\ai-service" rev-parse HEAD).Trim()
 
           Write-Host "Checking out ASRP App..."
-          git clone https://github.com/asrp-ecosystem/asrp-app.git "$asrpRoot\asrp_app"
+          git -c $authHeader clone --no-tags --quiet https://github.com/asrp-ecosystem/asrp-app.git "$asrpRoot\asrp_app"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to clone private repository asrp-app. Verify DOGFOOD_READ_TOKEN permissions."
+            exit 1
+          }
           git -C "$asrpRoot\asrp_app" checkout ${{ inputs.asrp_app_ref || '42bfcd26e40fbf8c274da4631dea1c0646ae831d' }}
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to checkout pinned revision for asrp-app."
+            exit 1
+          }
           $asrpAppSha = (git -C "$asrpRoot\asrp_app" rev-parse HEAD).Trim()
+
+          # Clear auth variables from memory
+          $authHeader = $null
+          $token = $null
 
           Write-Host "Installing ASRP web npm dependencies..."
           Push-Location "$asrpRoot\ASRP\web"
@@ -171,12 +254,38 @@ jobs:
           AGENTPROOF_ASRP_REPO: ${{ runner.temp }}\dogfood\ASRP
         run: dotnet test tests/AgentProof.IntegrationTests/AgentProof.IntegrationTests.csproj -c Release --no-build --filter Category=Dogfood --logger "trx;LogFileName=dogfood_results.trx"
 
-      - name: Upload Test Diagnostics on Failure
+      - name: Verify Dogfood Test Execution Proof
+        if: always()
+        shell: pwsh
+        run: |
+          $trxPath = "AgentProof/tests/AgentProof.IntegrationTests/TestResults/dogfood_results.trx"
+          if (!(Test-Path $trxPath)) {
+            Write-Error "Dogfood verification test results file ($trxPath) was not generated. Tests did not execute."
+            exit 1
+          }
+          [xml]$trx = Get-Content $trxPath
+          $counters = $trx.TestRun.ResultSummary.Counters
+          $total = [int]$counters.total
+          $passed = [int]$counters.passed
+          $failed = [int]$counters.failed
+          Write-Host "Dogfood Test Run Verification: Total=$total, Passed=$passed, Failed=$failed"
+          if ($total -eq 0) {
+            Write-Error "No dogfood tests were executed (zero tests executed). Dogfood requires real test execution."
+            exit 1
+          }
+          if ($failed -gt 0) {
+            Write-Error "Dogfood test execution failed with $failed failing test(s)."
+            exit 1
+          }
+          if ($passed -eq 0) {
+            Write-Error "Dogfood verification did not execute any passing tests."
+            exit 1
+          }
+
+      - name: Upload Sanitized Test Diagnostics on Failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: dogfood-test-results
-          path: |
-            AgentProof/tests/AgentProof.IntegrationTests/TestResults/
-            ${{ runner.temp }}/dogfood/
+          path: AgentProof/tests/AgentProof.IntegrationTests/TestResults/*.trx
           if-no-files-found: warn

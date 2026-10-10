@@ -57,11 +57,37 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
     {
         cancellationToken.ThrowIfCancellationRequested();
         var stopwatch = Stopwatch.StartNew();
+        string? isolatedArtifactDirectory = null;
         try
         {
             var workingDirectory = ValidateWorkingDirectory(root, step.WorkingDirectory);
             ValidateCommand(root, workingDirectory, step.Command);
             var startInfo = CreateStartInfo(step.Command, workingDirectory);
+
+            if (step.ProvidedEvidence.Contains(EvidenceType.Tests))
+            {
+                var runId = $"AP-{Guid.NewGuid():N}";
+                isolatedArtifactDirectory = Path.Combine(Path.GetTempPath(), "AgentProof", "TestRuns", runId);
+                Directory.CreateDirectory(isolatedArtifactDirectory);
+                startInfo.EnvironmentVariables["AGENTPROOF_RUN_ID"] = runId;
+                startInfo.EnvironmentVariables["AGENTPROOF_RESULTS_DIR"] = isolatedArtifactDirectory;
+                startInfo.EnvironmentVariables["CI"] = "true";
+
+                var executable = Path.GetFileNameWithoutExtension(step.Command.Executable).ToLowerInvariant();
+                if (executable == "dotnet" && step.Command.Arguments.Contains("test"))
+                {
+                    if (!step.Command.Arguments.Contains("--results-directory"))
+                    {
+                        startInfo.ArgumentList.Add("--results-directory");
+                        startInfo.ArgumentList.Add(isolatedArtifactDirectory);
+                    }
+                    if (!step.Command.Arguments.Contains("--logger") && !step.Command.Arguments.Any(a => a.StartsWith("-l", StringComparison.Ordinal)))
+                    {
+                        startInfo.ArgumentList.Add("--logger");
+                        startInfo.ArgumentList.Add("trx");
+                    }
+                }
+            }
 
             var startTimeUtc = DateTime.UtcNow;
             using var process = new Process { StartInfo = startInfo };
@@ -108,7 +134,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
 
                 if (passed && step.ProvidedEvidence.Contains(EvidenceType.Tests))
                 {
-                    if (!HasTestExecutionAssurance(step, stdoutText, stderrText, out var testFailureReason, workingDirectory, startTimeUtc))
+                    if (!HasTestExecutionAssurance(step, stdoutText, stderrText, out var testFailureReason, workingDirectory, startTimeUtc, isolatedArtifactDirectory))
                     {
                         passed = false;
                         failureReason = testFailureReason;
@@ -131,6 +157,13 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
         {
             return new VerificationEvidence(step, VerificationStepStatus.Failed, null, stopwatch.Elapsed,
                 string.Empty, ex.Message);
+        }
+        finally
+        {
+            if (isolatedArtifactDirectory != null)
+            {
+                try { if (Directory.Exists(isolatedArtifactDirectory)) Directory.Delete(isolatedArtifactDirectory, true); } catch { }
+            }
         }
     }
 
@@ -274,34 +307,61 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
 
     internal static bool HasTestExecutionAssurance(
         VerificationStep step, string stdout, string stderr, out string? failureReason) =>
-        HasTestExecutionAssurance(step, stdout, stderr, out failureReason, workingDirectory: null, executionStartTimeUtc: null);
+        HasTestExecutionAssurance(step, stdout, stderr, out failureReason, workingDirectory: null, executionStartTimeUtc: null, isolatedArtifactDirectory: null);
 
     internal static bool HasTestExecutionAssurance(
         VerificationStep step,
         string stdout,
         string stderr,
         out string? failureReason,
-        string? workingDirectory = null,
-        DateTime? executionStartTimeUtc = null)
+        string? workingDirectory,
+        DateTime? executionStartTimeUtc) =>
+        HasTestExecutionAssurance(step, stdout, stderr, out failureReason, workingDirectory, executionStartTimeUtc, isolatedArtifactDirectory: null);
+
+    internal static bool HasTestExecutionAssurance(
+        VerificationStep step,
+        string stdout,
+        string stderr,
+        out string? failureReason,
+        string? workingDirectory,
+        DateTime? executionStartTimeUtc,
+        string? isolatedArtifactDirectory)
     {
-        if (!string.IsNullOrWhiteSpace(workingDirectory) && Directory.Exists(workingDirectory))
+        var executable = Path.GetFileNameWithoutExtension(step.Command.Executable).ToLowerInvariant();
+        var isDotNet = executable == "dotnet" && step.Command.Arguments.Contains("test");
+        var isNode = NodeExecutables.Contains(executable) || executable == "node";
+
+        if (!string.IsNullOrWhiteSpace(isolatedArtifactDirectory) && Directory.Exists(isolatedArtifactDirectory))
         {
-            if (TryEvaluateStructuredReportArtifacts(workingDirectory, executionStartTimeUtc, out var artifactPassed, out var artifactReason))
+            if (TryEvaluateArtifactsInDirectory(isDotNet, isNode, isolatedArtifactDirectory, executionStartTimeUtc, out var isolatedPassed, out var isolatedReason))
             {
-                if (artifactPassed)
+                if (isolatedPassed)
                 {
                     failureReason = null;
                     return true;
                 }
 
-                failureReason = artifactReason;
+                failureReason = isolatedReason;
+                return false;
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(workingDirectory) && Directory.Exists(workingDirectory))
+        {
+            if (TryEvaluateDesignatedReportArtifacts(isDotNet, isNode, workingDirectory, executionStartTimeUtc, out var designatedPassed, out var designatedReason))
+            {
+                if (designatedPassed)
+                {
+                    failureReason = null;
+                    return true;
+                }
+
+                failureReason = designatedReason;
                 return false;
             }
         }
 
         var raw = $"{stdout}\n{stderr}";
         var combined = AnsiPattern().Replace(raw, "");
-        var executable = Path.GetFileNameWithoutExtension(step.Command.Executable).ToLowerInvariant();
 
         if (combined.Contains("[output truncated]"))
         {
@@ -309,7 +369,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
             return false;
         }
 
-        if (executable == "dotnet" && step.Command.Arguments.Contains("test"))
+        if (isDotNet)
         {
             if (DotNetZeroTestsPattern().IsMatch(combined))
             {
@@ -327,7 +387,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
             return false;
         }
 
-        if (NodeExecutables.Contains(executable) || executable == "node")
+        if (isNode)
         {
             if (NodeZeroTestsPattern().IsMatch(combined))
             {
@@ -353,21 +413,79 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
         return false;
     }
 
-    private static bool TryEvaluateStructuredReportArtifacts(
-        string workingDirectory, DateTime? executionStartTimeUtc, out bool isPassed, out string? failureReason)
+    private static bool TryEvaluateDesignatedReportArtifacts(
+        bool isDotNet, bool isNode, string workingDirectory, DateTime? executionStartTimeUtc, out bool isPassed, out string? failureReason)
+    {
+        isPassed = false;
+        failureReason = null;
+
+        if (isDotNet)
+        {
+            var candidateDirs = new List<string>();
+            var testResultsDir = Path.Combine(workingDirectory, "TestResults");
+            if (Directory.Exists(testResultsDir)) candidateDirs.Add(testResultsDir);
+            candidateDirs.Add(workingDirectory);
+
+            foreach (var dir in candidateDirs)
+            {
+                if (TryEvaluateTrxReportsInDirectory(dir, executionStartTimeUtc, out isPassed, out failureReason))
+                {
+                    return true;
+                }
+            }
+        }
+        else if (isNode)
+        {
+            if (TryEvaluateJsonReportsInDirectory(workingDirectory, executionStartTimeUtc, out isPassed, out failureReason))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryEvaluateArtifactsInDirectory(
+        bool isDotNet, bool isNode, string directory, DateTime? executionStartTimeUtc, out bool isPassed, out string? failureReason)
+    {
+        isPassed = false;
+        failureReason = null;
+
+        if (isDotNet)
+        {
+            return TryEvaluateTrxReportsInDirectory(directory, executionStartTimeUtc, out isPassed, out failureReason);
+        }
+
+        if (isNode)
+        {
+            return TryEvaluateJsonReportsInDirectory(directory, executionStartTimeUtc, out isPassed, out failureReason);
+        }
+
+        return false;
+    }
+
+    private static bool TryEvaluateTrxReportsInDirectory(
+        string directory, DateTime? executionStartTimeUtc, out bool isPassed, out string? failureReason)
     {
         isPassed = false;
         failureReason = null;
 
         try
         {
-            var trxCandidates = Directory.GetFiles(workingDirectory, "*.trx", SearchOption.AllDirectories);
-            foreach (var file in trxCandidates)
+            var files = Directory.GetFiles(directory, "*.trx", SearchOption.TopDirectoryOnly);
+            if (files.Length == 0) return false;
+
+            int aggregateTotal = 0;
+            int aggregatePassed = 0;
+            int aggregateFailed = 0;
+            bool foundValidReport = false;
+
+            foreach (var file in files)
             {
                 if (executionStartTimeUtc.HasValue)
                 {
                     var lastWrite = File.GetLastWriteTimeUtc(file);
-                    if (lastWrite < executionStartTimeUtc.Value.AddSeconds(-2))
+                    if (lastWrite < executionStartTimeUtc.Value.AddSeconds(-1))
                     {
                         continue;
                     }
@@ -376,32 +494,27 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
                 try
                 {
                     var doc = XDocument.Load(file);
-                    var counters = doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "Counters");
-                    if (counters != null)
+                    if (doc.Root?.Name.LocalName != "TestRun")
                     {
-                        var total = (int?)counters.Attribute("total") ?? 0;
-                        var passed = (int?)counters.Attribute("passed") ?? 0;
-                        var failed = (int?)counters.Attribute("failed") ?? 0;
-
-                        if (total == 0)
-                        {
-                            failureReason = "No tests were executed (zero tests discovered or executed).";
-                            return true;
-                        }
-
-                        if (failed > 0)
-                        {
-                            failureReason = $"Test run contained {failed} failing test(s).";
-                            return true;
-                        }
-
-                        if (passed > 0)
-                        {
-                            isPassed = true;
-                            failureReason = null;
-                            return true;
-                        }
+                        failureReason = "Test report artifact is malformed or could not be parsed.";
+                        return true;
                     }
+
+                    var counters = doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "Counters");
+                    if (counters == null || counters.Attribute("total") == null || counters.Attribute("passed") == null)
+                    {
+                        failureReason = "Test report artifact is malformed or could not be parsed.";
+                        return true;
+                    }
+
+                    var total = (int?)counters.Attribute("total") ?? 0;
+                    var passed = (int?)counters.Attribute("passed") ?? 0;
+                    var failed = (int?)counters.Attribute("failed") ?? 0;
+
+                    aggregateTotal += total;
+                    aggregatePassed += passed;
+                    aggregateFailed += failed;
+                    foundValidReport = true;
                 }
                 catch (Exception)
                 {
@@ -410,27 +523,63 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
                 }
             }
 
-            var jsonCandidates = Directory.GetFiles(workingDirectory, "*.json", SearchOption.AllDirectories)
+            if (!foundValidReport) return false;
+
+            if (aggregateTotal == 0)
+            {
+                failureReason = "No tests were executed (zero tests discovered or executed).";
+                return true;
+            }
+
+            if (aggregateFailed > 0)
+            {
+                failureReason = $"Test run contained {aggregateFailed} failing test(s).";
+                return true;
+            }
+
+            if (aggregatePassed > 0)
+            {
+                isPassed = true;
+                failureReason = null;
+                return true;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+
+        return false;
+    }
+
+    private static bool TryEvaluateJsonReportsInDirectory(
+        string directory, DateTime? executionStartTimeUtc, out bool isPassed, out string? failureReason)
+    {
+        isPassed = false;
+        failureReason = null;
+
+        try
+        {
+            var files = Directory.GetFiles(directory, "*.json", SearchOption.TopDirectoryOnly)
                 .Where(f =>
                 {
                     var name = Path.GetFileName(f);
-                    return name.Contains("test", StringComparison.OrdinalIgnoreCase) ||
-                           name.Contains("report", StringComparison.OrdinalIgnoreCase) ||
-                           name.Contains("result", StringComparison.OrdinalIgnoreCase);
-                });
+                    return name.Equals("test-report.json", StringComparison.OrdinalIgnoreCase) ||
+                           name.Equals("test-results.json", StringComparison.OrdinalIgnoreCase) ||
+                           name.Equals("report.json", StringComparison.OrdinalIgnoreCase);
+                })
+                .ToArray();
 
-            foreach (var file in jsonCandidates)
+            if (files.Length == 0) return false;
+
+            int aggregateTotal = 0;
+            int aggregatePassed = 0;
+            int aggregateFailed = 0;
+            bool foundValidReport = false;
+
+            foreach (var file in files)
             {
-                if (file.EndsWith("package.json", StringComparison.OrdinalIgnoreCase) ||
-                    file.EndsWith("tsconfig.json", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
                 if (executionStartTimeUtc.HasValue)
                 {
                     var lastWrite = File.GetLastWriteTimeUtc(file);
-                    if (lastWrite < executionStartTimeUtc.Value.AddSeconds(-2))
+                    if (lastWrite < executionStartTimeUtc.Value.AddSeconds(-1))
                     {
                         continue;
                     }
@@ -444,59 +593,33 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
 
                     if (root.TryGetProperty("numTotalTests", out var numTotal) &&
                         root.TryGetProperty("numPassedTests", out var numPassed) &&
-                        root.TryGetProperty("numFailedTests", out var numFailed))
+                        root.TryGetProperty("numFailedTests", out var numFailed) &&
+                        numTotal.TryGetInt32(out var total) &&
+                        numPassed.TryGetInt32(out var passed) &&
+                        numFailed.TryGetInt32(out var failed))
                     {
-                        var total = numTotal.GetInt32();
-                        var passed = numPassed.GetInt32();
-                        var failed = numFailed.GetInt32();
-
-                        if (total == 0)
-                        {
-                            failureReason = "No tests were executed (zero tests discovered or executed).";
-                            return true;
-                        }
-
-                        if (failed > 0)
-                        {
-                            failureReason = $"Test run contained {failed} failing test(s).";
-                            return true;
-                        }
-
-                        if (passed > 0)
-                        {
-                            isPassed = true;
-                            failureReason = null;
-                            return true;
-                        }
+                        aggregateTotal += total;
+                        aggregatePassed += passed;
+                        aggregateFailed += failed;
+                        foundValidReport = true;
                     }
-
-                    if (root.TryGetProperty("stats", out var stats) &&
-                        stats.TryGetProperty("tests", out var mTests) &&
-                        stats.TryGetProperty("passes", out var mPasses) &&
-                        stats.TryGetProperty("failures", out var mFailures))
+                    else if (root.TryGetProperty("stats", out var stats) &&
+                             stats.TryGetProperty("tests", out var mTests) &&
+                             stats.TryGetProperty("passes", out var mPasses) &&
+                             stats.TryGetProperty("failures", out var mFailures) &&
+                             mTests.TryGetInt32(out var mochaTotal) &&
+                             mPasses.TryGetInt32(out var mochaPassed) &&
+                             mFailures.TryGetInt32(out var mochaFailed))
                     {
-                        var total = mTests.GetInt32();
-                        var passed = mPasses.GetInt32();
-                        var failed = mFailures.GetInt32();
-
-                        if (total == 0)
-                        {
-                            failureReason = "No tests were executed (zero tests discovered or executed).";
-                            return true;
-                        }
-
-                        if (failed > 0)
-                        {
-                            failureReason = $"Test run contained {failed} failing test(s).";
-                            return true;
-                        }
-
-                        if (passed > 0)
-                        {
-                            isPassed = true;
-                            failureReason = null;
-                            return true;
-                        }
+                        aggregateTotal += mochaTotal;
+                        aggregatePassed += mochaPassed;
+                        aggregateFailed += mochaFailed;
+                        foundValidReport = true;
+                    }
+                    else
+                    {
+                        failureReason = "Test report artifact is malformed or could not be parsed.";
+                        return true;
                     }
                 }
                 catch (JsonException)
@@ -505,15 +628,34 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
                     return true;
                 }
             }
+
+            if (!foundValidReport) return false;
+
+            if (aggregateTotal == 0)
+            {
+                failureReason = "No tests were executed (zero tests discovered or executed).";
+                return true;
+            }
+
+            if (aggregateFailed > 0)
+            {
+                failureReason = $"Test run contained {aggregateFailed} failing test(s).";
+                return true;
+            }
+
+            if (aggregatePassed > 0)
+            {
+                isPassed = true;
+                failureReason = null;
+                return true;
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
 
         return false;
     }
 
-    [GeneratedRegex(@"(?i)(Passed!\s*-\s*Failed:\s*0,\s*Passed:\s*[1-9]\d*|Total tests:\s*[1-9]\d*.*Passed:\s*[1-9]\d*.*Failed:\s*0|Passed:\s*[1-9]\d*.*Failed:\s*0)")]
+    [GeneratedRegex(@"(?i)(Passed!\s*-\s*Failed:\s*0,\s*Passed:\s*[1-9]\d*|Total tests:\s*[1-9]\d*[\s\S]*?Passed:\s*[1-9]\d*[\s\S]*?Failed:\s*0)")]
     private static partial Regex DotNetTestsPassedPattern();
 
     [GeneratedRegex(@"(?i)Test run summary:\s*Passed!(?:[\s\S]*?\btotal:\s*[1-9]\d*)?(?:[\s\S]*?\b(?:succeeded|passed):\s*[1-9]\d*)?[\s\S]*?\bfailed:\s*0\b")]
@@ -522,7 +664,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
     [GeneratedRegex(@"(?i)(No test matches the given|A total of 0 test files matched|No tests found to run|Total tests:\s*0\b|Passed!\s*-\s*Failed:\s*0,\s*Passed:\s*0\b|Total:\s*0\b|succeeded:\s*0\b)")]
     private static partial Regex DotNetZeroTestsPattern();
 
-    [GeneratedRegex(@"(?i)(?:TAP version 13|^ok\s+\d+\s+-)?[\s\S]*?#\s*tests\s*[1-9]\d*[\s\S]*?#\s*pass\s*[1-9]\d*[\s\S]*?#\s*fail\s*0\b", RegexOptions.Multiline)]
+    [GeneratedRegex(@"(?m)(?:TAP version 13|^ok\s+\d+\s+-)[\s\S]*?#\s*tests\s*[1-9]\d*[\s\S]*?#\s*pass\s*[1-9]\d*[\s\S]*?#\s*fail\s*0\b")]
     private static partial Regex NodeTapTestsPassedPattern();
 
     [GeneratedRegex(@"(?i)ℹ\s*tests\s*[1-9]\d*[\s\S]*?ℹ\s*pass\s*[1-9]\d*[\s\S]*?ℹ\s*fail\s*0\b")]
