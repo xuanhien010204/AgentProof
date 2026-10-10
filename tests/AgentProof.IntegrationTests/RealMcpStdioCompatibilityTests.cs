@@ -8,9 +8,6 @@ namespace AgentProof.IntegrationTests;
 
 public sealed class RealMcpStdioCompatibilityTests
 {
-    private const string EducationRepoPath = "D:/project/EducationCMS";
-    private const string AsrpRepoPath = "D:/project/ASRP";
-
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -18,12 +15,17 @@ public sealed class RealMcpStdioCompatibilityTests
         Converters = { new JsonStringEnumConverter() }
     };
 
-    [Fact]
+    [DogfoodFact("AGENTPROOF_EDUCATION_REPO")]
     public async Task EducationCmsRealMcpStdioWorkflowVerifiesSuccessfully()
     {
-        if (!Directory.Exists(EducationRepoPath)) return;
+        var educationRepoPath = GetEducationRepoPath();
+        if (string.IsNullOrWhiteSpace(educationRepoPath) || !Directory.Exists(educationRepoPath))
+        {
+            Assert.Fail("AGENTPROOF_EDUCATION_REPO environment variable was not provided or points to a non-existent path.");
+            return;
+        }
 
-        var taskJsonPath = "D:/project/AgentProof/benchmarks/tasks/education-fullstack.json";
+        var taskJsonPath = ResolveTaskJsonPath("benchmarks/tasks/education-fullstack.json");
         var taskContent = await File.ReadAllTextAsync(taskJsonPath);
         var taskContext = JsonSerializer.Deserialize<TaskContext>(taskContent, JsonOptions)
             ?? throw new InvalidOperationException("Failed to load education task context.");
@@ -35,7 +37,7 @@ public sealed class RealMcpStdioCompatibilityTests
         Assert.True(listResult.Success);
 
         // 3. analyze_repository
-        var analyze = await client.CallToolAsync("analyze_repository", new { repositoryPath = EducationRepoPath });
+        var analyze = await client.CallToolAsync("analyze_repository", new { repositoryPath = educationRepoPath });
         Assert.True(analyze.Success);
         var profile = JsonSerializer.Deserialize<CompactRepositoryProfile>(analyze.ToolResultText, JsonOptions)!;
         Assert.Equal(1, profile.SchemaVersion);
@@ -43,14 +45,14 @@ public sealed class RealMcpStdioCompatibilityTests
         Assert.Equal([".", "backend", "frontend"], profile.Workspaces.Select(w => w.Id).ToArray());
 
         // 4. recommend_skills
-        var recsResult = await client.CallToolAsync("recommend_skills", new { repositoryPath = EducationRepoPath, taskContext });
+        var recsResult = await client.CallToolAsync("recommend_skills", new { repositoryPath = educationRepoPath, taskContext });
         Assert.True(recsResult.Success);
         var recs = JsonSerializer.Deserialize<List<CompactSkillRecommendation>>(recsResult.ToolResultText, JsonOptions)!;
         Assert.NotEmpty(recs);
         Assert.All(recs, r => Assert.Equal(1, r.SchemaVersion));
 
         // 5. create_verification_plan
-        var planResult = await client.CallToolAsync("create_verification_plan", new { repositoryPath = EducationRepoPath, taskContext });
+        var planResult = await client.CallToolAsync("create_verification_plan", new { repositoryPath = educationRepoPath, taskContext });
         Assert.True(planResult.Success);
         var plan = JsonSerializer.Deserialize<CompactVerificationPlan>(planResult.ToolResultText, JsonOptions)!;
         Assert.Equal(1, plan.SchemaVersion);
@@ -58,7 +60,7 @@ public sealed class RealMcpStdioCompatibilityTests
         Assert.Equal(3, plan.WorkspaceIds.Count);
 
         // 6. verify (compact default)
-        var verifyResult = await client.CallToolAsync("verify", new { repositoryPath = EducationRepoPath, taskContext });
+        var verifyResult = await client.CallToolAsync("verify", new { repositoryPath = educationRepoPath, taskContext });
         Assert.True(verifyResult.Success);
         var vResult = JsonSerializer.Deserialize<CompactVerificationResult>(verifyResult.ToolResultText, JsonOptions)!;
         Assert.Equal(1, vResult.SchemaVersion);
@@ -73,7 +75,7 @@ public sealed class RealMcpStdioCompatibilityTests
         Assert.False(verifyDoc.RootElement.TryGetProperty("evidence", out _));
 
         // 7. verify (full mode detail retrieval)
-        var verifyFullResult = await client.CallToolAsync("verify", new { repositoryPath = EducationRepoPath, taskContext, detailLevel = "full" });
+        var verifyFullResult = await client.CallToolAsync("verify", new { repositoryPath = educationRepoPath, taskContext, detailLevel = "full" });
         Assert.True(verifyFullResult.Success);
         var vFullResult = JsonSerializer.Deserialize<CompactVerificationResult>(verifyFullResult.ToolResultText, JsonOptions)!;
         Assert.Equal(1, vFullResult.SchemaVersion);
@@ -89,12 +91,17 @@ public sealed class RealMcpStdioCompatibilityTests
         });
     }
 
-    [Fact]
+    [DogfoodFact("AGENTPROOF_ASRP_REPO")]
     public async Task AsrpRealMcpStdioWorkflowPreservesWorkspacesFailuresAndUnsupportedVerifiers()
     {
-        if (!Directory.Exists(AsrpRepoPath)) return;
+        var asrpRepoPath = GetAsrpRepoPath();
+        if (string.IsNullOrWhiteSpace(asrpRepoPath) || !Directory.Exists(asrpRepoPath))
+        {
+            Assert.Fail("AGENTPROOF_ASRP_REPO environment variable was not provided or points to a non-existent path.");
+            return;
+        }
 
-        var taskJsonPath = "D:/project/AgentProof/benchmarks/tasks/asrp-fullstack.json";
+        var taskJsonPath = ResolveTaskJsonPath("benchmarks/tasks/asrp-fullstack.json");
         var taskContent = await File.ReadAllTextAsync(taskJsonPath);
         var taskContext = JsonSerializer.Deserialize<TaskContext>(taskContent, JsonOptions)
             ?? throw new InvalidOperationException("Failed to load ASRP task context.");
@@ -106,7 +113,7 @@ public sealed class RealMcpStdioCompatibilityTests
         Assert.True(listResult.Success);
 
         // 3. analyze_repository
-        var analyze = await client.CallToolAsync("analyze_repository", new { repositoryPath = AsrpRepoPath });
+        var analyze = await client.CallToolAsync("analyze_repository", new { repositoryPath = asrpRepoPath });
         Assert.True(analyze.Success);
         var profile = JsonSerializer.Deserialize<CompactRepositoryProfile>(analyze.ToolResultText, JsonOptions)!;
         Assert.Equal(1, profile.SchemaVersion);
@@ -116,13 +123,13 @@ public sealed class RealMcpStdioCompatibilityTests
         Assert.Equal("No active verifier is available for: Flutter.", profile.Workspaces.Single(w => w.Id == "asrp_app").UnsupportedVerifierReason);
 
         // 4. recommend_skills
-        var recsResult = await client.CallToolAsync("recommend_skills", new { repositoryPath = AsrpRepoPath, taskContext });
+        var recsResult = await client.CallToolAsync("recommend_skills", new { repositoryPath = asrpRepoPath, taskContext });
         Assert.True(recsResult.Success);
         var recs = JsonSerializer.Deserialize<List<CompactSkillRecommendation>>(recsResult.ToolResultText, JsonOptions)!;
         Assert.NotEmpty(recs);
 
         // 5. create_verification_plan
-        var planResult = await client.CallToolAsync("create_verification_plan", new { repositoryPath = AsrpRepoPath, taskContext });
+        var planResult = await client.CallToolAsync("create_verification_plan", new { repositoryPath = asrpRepoPath, taskContext });
         Assert.True(planResult.Success);
         var plan = JsonSerializer.Deserialize<CompactVerificationPlan>(planResult.ToolResultText, JsonOptions)!;
         Assert.Equal(1, plan.SchemaVersion);
@@ -132,7 +139,7 @@ public sealed class RealMcpStdioCompatibilityTests
         Assert.Contains(plan.UnsupportedWorkspaces, u => u.WorkspaceId == "asrp_app" && u.Technologies.Contains("Flutter"));
 
         // 6. verify (compact default)
-        var verifyResult = await client.CallToolAsync("verify", new { repositoryPath = AsrpRepoPath, taskContext });
+        var verifyResult = await client.CallToolAsync("verify", new { repositoryPath = asrpRepoPath, taskContext });
         Assert.True(verifyResult.Success);
         var vResult = JsonSerializer.Deserialize<CompactVerificationResult>(verifyResult.ToolResultText, JsonOptions)!;
         Assert.Equal(1, vResult.SchemaVersion);
@@ -159,7 +166,7 @@ public sealed class RealMcpStdioCompatibilityTests
         Assert.Null(vResult.Evidence);
 
         // 7. verify (full mode detail retrieval)
-        var verifyFullResult = await client.CallToolAsync("verify", new { repositoryPath = AsrpRepoPath, taskContext, detailLevel = "full" });
+        var verifyFullResult = await client.CallToolAsync("verify", new { repositoryPath = asrpRepoPath, taskContext, detailLevel = "full" });
         Assert.True(verifyFullResult.Success);
         var vFullResult = JsonSerializer.Deserialize<CompactVerificationResult>(verifyFullResult.ToolResultText, JsonOptions)!;
         Assert.Equal(VerificationStatus.NotVerified, vFullResult.Status);
@@ -171,5 +178,33 @@ public sealed class RealMcpStdioCompatibilityTests
         Assert.Equal(VerificationStepStatus.Failed, failedEvidence.Status);
         Assert.Equal(1, failedEvidence.ExitCode);
         Assert.Contains("Parsing error", failedEvidence.OutputSummary);
+    }
+
+    private static string? GetEducationRepoPath()
+    {
+        var env = Environment.GetEnvironmentVariable("AGENTPROOF_EDUCATION_REPO");
+        if (!string.IsNullOrWhiteSpace(env) && Directory.Exists(env)) return env;
+        return null;
+    }
+
+    private static string? GetAsrpRepoPath()
+    {
+        var env = Environment.GetEnvironmentVariable("AGENTPROOF_ASRP_REPO");
+        if (!string.IsNullOrWhiteSpace(env) && Directory.Exists(env)) return env;
+        return null;
+    }
+
+    private static string ResolveTaskJsonPath(string relativePath)
+    {
+        var current = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(current))
+        {
+            var candidate = Path.Combine(current, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(candidate)) return candidate;
+            var parent = Directory.GetParent(current);
+            if (parent == null) break;
+            current = parent.FullName;
+        }
+        return Path.GetFullPath(relativePath);
     }
 }

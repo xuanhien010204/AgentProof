@@ -36,12 +36,20 @@ The response records use `JsonIgnore` for absent optional fields only; a missing
    - `schemaVersion` is ordered first in JSON object output to ensure deterministic, self-describing payloads for consuming agents.
 
 2. **Progressive Disclosure (`detailLevel`)**:
-   - `verify` supports an optional `detailLevel` argument:
-     - `"compact"` (default): Returns the context-efficient summary (750 bytes on EducationCMS, ~1.3KB on ASRP) with zero successful output and durations omitted. Failed step identities, exit codes, and diagnostic output summaries are always preserved directly in `failedSteps`.
-     - `"full"`: Retains the exact same verification semantics, summary, status, and failures, but additionally populates an `evidence` array containing `DetailedVerificationEvidence` for every step (including passing step stdout and per-step duration in milliseconds).
-   - Verification execution is never altered by requesting detail; evidence is mapped from the identical execution result.
+   - `verify` supports an optional `detailLevel` argument (`"compact"` | `"full"`, case-insensitive, default `"compact"`).
+   - Input validation is strictly evaluated **prior** to any verification or process execution. Null, empty, whitespace, or unrecognized values are rejected immediately with descriptive errors.
+   - **`"compact"` (Canonical Production Payload)**:
+     - Returns context-efficient summary accounting (`Summary`), passed step IDs, failed step diagnostics, timed out step diagnostics, and grouped `NotRun` step IDs.
+     - Successful step stdout and execution timings are omitted, reducing payload size by 65–75% compared to raw domain streams.
+     - Failed and timed-out steps preserve exact exit codes, failure diagnostics, commands, and output summaries directly in `failedSteps` / `timedOutSteps`.
+   - **`"full"` (Diagnostic Mode)**:
+     - Retains the exact same `schemaVersion: 1` wrapper and summary accounting.
+     - Populates the `evidence` field with an array of `DetailedVerificationEvidence` objects containing per-step status, exit code, duration in milliseconds, working directory, and output summary.
+     - **Not a reproduction of the internal Domain model**: `detailLevel: "full"` formats diagnostic evidence into the MCP contract (`DetailedVerificationEvidence`), not the raw Domain `VerificationResult` entity.
+     - **Execution Cost & Performance**: Calling `verify` with `detailLevel: "full"` executes the complete build/test verification pipeline for that call. Invoking `verify` with `detailLevel: "full"` after a previous `compact` call will execute commands a second time. Agents should treat `full` as an intentional diagnostic mode when deep per-step logs are needed.
 
-3. **Compatibility Assessment**:
-   - The Compact MCP wire format is a **breaking contract change** for strict consumers expecting the internal domain model shape (e.g. `evidence` array with embedded `step` objects in `verify`, or nested `skill` objects in `recommend_skills`).
-   - Legacy consumers requiring per-step evidence can request `detailLevel = "full"` to retrieve explicit evidence objects.
+3. **Compatibility Assessment & Versioning Expectations**:
+   - `schemaVersion: 1` is the active, stable contract wire format.
+   - The compact MCP contract is distinct from internal Domain entity shapes; MCP clients must consume `CompactVerificationResult` rather than internal Domain objects.
+   - Optional fields are omitted when not applicable via `[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]`, ensuring backward compatibility for existing consumers as new diagnostic metadata is introduced.
 

@@ -260,13 +260,532 @@ public sealed class BenchmarkHarnessTests
         Assert.Contains("Payload reduction is a context-efficiency proxy", markdown);
     }
 
+    [Fact]
+    public void ComparisonDetectsDifferentWorkspaceIdsWithSameCountAsFailure()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "analyze_repository",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    WorkspaceCount = 2,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        Workspaces =
+                        [
+                            new WorkspaceSemanticSnapshot("backend", "src/Backend", ["C#"], [".NET"], "dotnet", "Backend.csproj", null),
+                            new WorkspaceSemanticSnapshot("frontend", "src/Frontend", ["TypeScript"], ["React"], "npm", null, null)
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 800,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "analyze_repository",
+                    PayloadBytesUtf8 = 800,
+                    Success = true,
+                    WorkspaceCount = 2,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        Workspaces =
+                        [
+                            new WorkspaceSemanticSnapshot("backend", "src/Backend", ["C#"], [".NET"], "dotnet", "Backend.csproj", null),
+                            new WorkspaceSemanticSnapshot("worker", "src/Worker", ["C#"], [".NET"], "dotnet", "Worker.csproj", null)
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("Workspace IDs mismatch", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(comparison.Failures, f => f.Contains("frontend", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonDetectsChangedCommandWithSameStepCountAsFailure()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "create_verification_plan",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    StepCount = 1,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        PlannedSteps =
+                        [
+                            new PlanStepSemanticSnapshot("step-1", "backend", "Build", ["dotnet", "build"], true, ["Build"])
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 800,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "create_verification_plan",
+                    PayloadBytesUtf8 = 800,
+                    Success = true,
+                    StepCount = 1,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        PlannedSteps =
+                        [
+                            new PlanStepSemanticSnapshot("step-1", "backend", "Build", ["dotnet", "test"], true, ["Build"])
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("command changed", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(comparison.Failures, f => f.Contains("dotnet test", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonDetectsMissingFailureReasonWithSameStatusAsFailure()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    VerificationStatus = "NotVerified",
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationStatus = "NotVerified",
+                        FailedSteps =
+                        [
+                            new StepFailureSemanticSnapshot("step-1", "backend", "Build", ["dotnet", "build"], 1, "Compilation error CS1002")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 800,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 800,
+                    Success = true,
+                    VerificationStatus = "NotVerified",
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationStatus = "NotVerified",
+                        FailedSteps =
+                        [
+                            new StepFailureSemanticSnapshot("step-1", "backend", "Build", ["dotnet", "build"], 1, null)
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("failure reason changed", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonPreservesEquivalenceWhenWorkspacesAndEvidenceAreReordered()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "analyze_repository",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    WorkspaceCount = 2,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        Workspaces =
+                        [
+                            new WorkspaceSemanticSnapshot("backend", "src/Backend", ["C#"], [".NET"], "dotnet", "Backend.csproj", null),
+                            new WorkspaceSemanticSnapshot("frontend", "src/Frontend", ["TypeScript"], ["React"], "npm", null, null)
+                        ]
+                    }
+                },
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    VerificationStatus = "Verified",
+                    EvidenceCount = 2,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationStatus = "Verified",
+                        PassedStepIds = ["step-1", "step-2"],
+                        Summary = new AgentProof.Mcp.CompactVerificationSummary(2, 2, 2, 2, 0, 0, 0)
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "analyze_repository",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    WorkspaceCount = 2,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        Workspaces =
+                        [
+                            new WorkspaceSemanticSnapshot("frontend", "src/Frontend", ["TypeScript"], ["React"], "npm", null, null),
+                            new WorkspaceSemanticSnapshot("backend", "src/Backend", ["C#"], [".NET"], "dotnet", "Backend.csproj", null)
+                        ]
+                    }
+                },
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    VerificationStatus = "Verified",
+                    EvidenceCount = 2,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationStatus = "Verified",
+                        PassedStepIds = ["step-2", "step-1"],
+                        Summary = new AgentProof.Mcp.CompactVerificationSummary(2, 2, 2, 2, 0, 0, 0)
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Pass, comparison.Verdict);
+        Assert.Empty(comparison.Failures);
+    }
+
+    [Fact]
+    public void ComparisonDetectsIncreasedGapCountOrMissingEvidenceAsFailure()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    VerificationStatus = "Verified",
+                    EvidenceCount = 3,
+                    GapCount = 0,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationStatus = "Verified",
+                        PassedStepIds = ["step-1", "step-2", "step-3"],
+                        VerificationGaps = [],
+                        Summary = new AgentProof.Mcp.CompactVerificationSummary(3, 3, 3, 3, 0, 0, 0)
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 800,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 800,
+                    Success = true,
+                    VerificationStatus = "Verified",
+                    EvidenceCount = 2,
+                    GapCount = 1,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationStatus = "Verified",
+                        PassedStepIds = ["step-1", "step-2"],
+                        VerificationGaps = [new GapSemanticSnapshot("COVERAGE_DEFICIT", "Missing frontend tests")],
+                        Summary = new AgentProof.Mcp.CompactVerificationSummary(3, 2, 2, 2, 0, 0, 1)
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("Evidence count regressed", StringComparison.OrdinalIgnoreCase) ||
+                                                 f.Contains("new gap", StringComparison.OrdinalIgnoreCase) ||
+                                                 f.Contains("COVERAGE_DEFICIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonHandlesBackwardCompatibilityWithScalarOnlyArtifactsGracefully()
+    {
+        // Older scalar-only artifacts have NO SemanticSnapshot and NO ToolResultText
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "SampleRepo",
+            AgentProofVersion = "0.2.0",
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    WorkspaceCount = 2,
+                    EvidenceCount = 3,
+                    VerificationStatus = "Verified"
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "SampleRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 800,
+                    Success = true,
+                    WorkspaceCount = 2,
+                    EvidenceCount = 3,
+                    VerificationStatus = "Verified"
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.NotEqual(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Empty(comparison.Failures);
+        Assert.Contains(comparison.Warnings, w => w.Contains("scalar", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonDetectsVerifiedToPartiallyVerifiedAsFail()
+    {
+        var baseline = CreateSampleRun("Verified", payloadBytes: 1000, gaps: 0, evidence: 3);
+        var candidate = CreateSampleRun("PartiallyVerified", payloadBytes: 800, gaps: 1, evidence: 2);
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("Verification status regressed", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonDetectsStepCountReductionAsFail()
+    {
+        var baseline = CreateSampleRun("Verified", payloadBytes: 1000, gaps: 0, evidence: 3);
+        var candidate = CreateSampleRun("Verified", payloadBytes: 800, gaps: 0, evidence: 3, stepCountOverride: 2);
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("Step count decreased", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonDetectsDifferentGapCodesAsFail()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    VerificationStatus = "PartiallyVerified",
+                    GapCount = 1,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationStatus = "PartiallyVerified",
+                        VerificationGaps = [new GapSemanticSnapshot("MISSING_EVIDENCE_TESTS", "No tests found")]
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 800,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 800,
+                    Success = true,
+                    VerificationStatus = "PartiallyVerified",
+                    GapCount = 1,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationStatus = "PartiallyVerified",
+                        VerificationGaps = [new GapSemanticSnapshot("UNSUPPORTED_TECHNOLOGY", "Python not supported")]
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("new verification gap code(s)", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(comparison.Failures, f => f.Contains("UNSUPPORTED_TECHNOLOGY", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonDetectsDifferentUnsupportedVerifiersAsFail()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "analyze_repository",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    WorkspaceCount = 1,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        Workspaces =
+                        [
+                            new WorkspaceSemanticSnapshot("ai-service", "src/ai", ["Python"], ["FastAPI"], null, null, "Python verification is not currently supported.")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 800,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "analyze_repository",
+                    PayloadBytesUtf8 = 800,
+                    Success = true,
+                    WorkspaceCount = 1,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        Workspaces =
+                        [
+                            new WorkspaceSemanticSnapshot("ai-service", "src/ai", ["Python"], ["FastAPI"], null, null, "Flutter verification is not currently supported.")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("unsupported verifier reason mismatch", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static BenchmarkRun CreateSampleRun(
         string verificationStatus,
         long payloadBytes,
         int gaps,
         int evidence,
-        int workspaces = 1)
+        int workspaces = 1,
+        int? stepCountOverride = null)
     {
+        var passedCount = verificationStatus == "Verified" ? evidence : 0;
+        var failedCount = verificationStatus == "Verified" ? 0 : 1;
+        var stepCount = stepCountOverride ?? Math.Max(evidence, passedCount + failedCount);
+        var passedIds = verificationStatus == "Verified"
+            ? Enumerable.Range(1, passedCount).Select(i => $"step-{i}").ToList()
+            : [];
+
         return new BenchmarkRun
         {
             RepositoryName = "SampleRepo",
@@ -294,13 +813,29 @@ public sealed class BenchmarkHarnessTests
                     PayloadBytesHistory = [payloadBytes],
                     Success = true,
                     WorkspaceCount = workspaces,
-                    StepCount = 3,
+                    StepCount = stepCount,
                     EvidenceCount = evidence,
                     GapCount = gaps,
                     VerificationStatus = verificationStatus,
-                    PassedStepCount = verificationStatus == "Verified" ? evidence : 0,
-                    FailedStepCount = verificationStatus == "Verified" ? 0 : 1,
-                    TimedOutStepCount = 0
+                    PlannedStepCount = stepCount,
+                    ExecutedStepCount = stepCount,
+                    PassedStepCount = passedCount,
+                    FailedStepCount = failedCount,
+                    TimedOutStepCount = 0,
+                    NotRunStepCount = 0,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationStatus = verificationStatus,
+                        PassedStepIds = passedIds,
+                        Summary = new AgentProof.Mcp.CompactVerificationSummary(
+                            stepCount,
+                            evidence,
+                            stepCount,
+                            passedCount,
+                            failedCount,
+                            0,
+                            0)
+                    }
                 }
             ]
         };

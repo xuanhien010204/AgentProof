@@ -38,7 +38,12 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
                 var suffix = workspace.DotNetEntryPoint is null ? Array.Empty<string>() : new[] { workspace.DotNetEntryPoint };
                 steps.Add(DotNetStep(StepId(workspaceKey, "dotnet-restore"), "Restore .NET dependencies", "restore", suffix, workspaceRoot, [], workspace.Id));
                 steps.Add(DotNetStep(StepId(workspaceKey, "dotnet-build"), "Build .NET solution", "build", suffix, workspaceRoot, [EvidenceType.Build], workspace.Id));
-                steps.Add(DotNetStep(StepId(workspaceKey, "dotnet-test"), "Run .NET tests", "test", suffix, workspaceRoot, [EvidenceType.Tests], workspace.Id));
+                var isStandaloneCsproj = workspace.DotNetEntryPoint is not null &&
+                    workspace.DotNetEntryPoint.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase);
+                if (workspace.TestFrameworks.Count > 0 || !isStandaloneCsproj)
+                {
+                    steps.Add(DotNetStep(StepId(workspaceKey, "dotnet-test"), "Run .NET tests", "test", suffix, workspaceRoot, [EvidenceType.Tests], workspace.Id));
+                }
             }
 
             if (workspace.Technologies.Contains("Node.js"))
@@ -48,6 +53,12 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
                 var manager = workspace.PackageManager ?? "npm";
                 foreach (var script in KnownNodeScripts.Where(scripts.ContainsKey))
                     steps.Add(new VerificationStep(StepId(workspaceKey, $"node-{script}"), $"Run Node.js {script}", "Node", new VerificationCommand(manager, ["run", script]), workspaceRoot, TimeSpan.FromMinutes(5), true, NodeScriptEvidence(script), workspace.Id));
+            }
+
+            if (!workspace.Technologies.Contains(".NET") && !workspace.Technologies.Contains("Node.js"))
+            {
+                var tech = workspace.Technologies.Count == 0 ? "unknown" : string.Join(", ", workspace.Technologies);
+                AddGap(gaps, "UNSUPPORTED_WORKSPACE_VERIFIER", $"Workspace '{workspace.Id}' is in scope, but no active verifier is available for: {tech}.");
             }
         }
 
@@ -78,12 +89,25 @@ public sealed class DeterministicVerificationPlanner(IRepositoryConfigurationRea
 
         var providedEvidence = new HashSet<EvidenceType>(steps.SelectMany(x => x.ProvidedEvidence));
         AddMissingEvidenceGaps(gaps, requiredEvidence, providedEvidence);
+        foreach (var req in effectiveRequirements.Where(r => r.WorkspaceId is not null))
+        {
+            var ws = workspaces.FirstOrDefault(w => string.Equals(w.Id, req.WorkspaceId, StringComparison.Ordinal));
+            if (ws is null)
+            {
+                AddGap(gaps, "MISSING_WORKSPACE_EVIDENCE_PROVIDER", $"Evidence requirement references unknown workspace '{req.WorkspaceId}'.");
+            }
+            else if (req.Type != EvidenceType.Browser &&
+                     !steps.Any(s => string.Equals(s.WorkspaceId, req.WorkspaceId, StringComparison.Ordinal) && s.ProvidedEvidence.Contains(req.Type)))
+            {
+                AddGap(gaps, "MISSING_WORKSPACE_EVIDENCE_PROVIDER", $"No verification capability is available for evidence type '{req.Type}' in workspace '{req.WorkspaceId}'.");
+            }
+        }
         foreach (var criterion in contract.AcceptanceCriteria)
             if (criterion.GetEffectiveEvidenceRequirements().Count == 0 && contract.GetEffectiveEvidenceRequirements().Count == 0)
                 gaps.Add(new VerificationGap("UNVERIFIED_ACCEPTANCE_CRITERION", string.IsNullOrWhiteSpace(criterion.Id)
                     ? "Acceptance criterion is not connected to any required verification evidence."
                     : $"Acceptance criterion '{criterion.Id}' is not connected to any required verification evidence."));
-        return new VerificationPlan(steps, gaps, workspaces.Select(x => x.Id).Distinct(StringComparer.Ordinal).ToArray());
+        return new VerificationPlan(steps, gaps, plannedWorkspaces.Select(x => x.Id).Distinct(StringComparer.Ordinal).ToArray());
     }
 
     private static IReadOnlyList<RepositoryWorkspace> SelectPlannedWorkspaces(

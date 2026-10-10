@@ -83,7 +83,7 @@ public sealed class VerificationRunnerTests
         if (!OperatingSystem.IsWindows() && SafeVerificationRunner.ResolveWindowsNodeLauncher("npm") is not null) return;
 
         using var repo = new TemporaryRepository();
-        repo.Write("package.json", """{"scripts":{"test":"node -e \"process.exit(0)\""}}""");
+        repo.Write("package.json", """{"scripts":{"test":"node -e \"const { test } = require('node:test'); const assert = require('node:assert'); test('t', () => assert.strictEqual(1, 1));\""}}""");
         var step = new VerificationStep("node-test", "Run Node.js test", "Node",
             new VerificationCommand("npm", ["run", "test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests], ".");
 
@@ -300,6 +300,109 @@ public sealed class VerificationRunnerTests
         Assert.Equal(2, notRunCount);
         Assert.Equal(plannedCount, passedCount + failedCount + timedOutCount + notRunCount);
         Assert.Equal(plannedCount, result.Evidence.Count);
+    }
+
+    [Fact]
+    public void DotNetTestsPassingOutputReturnsTrue()
+    {
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test", "Tests.csproj"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var stdout = "Passed!  - Failed:     0, Passed:     8, Skipped:     0, Total:     8, Duration: 923 ms - Education.Tests.dll (net10.0)";
+        
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, stdout, string.Empty, out var reason);
+
+        Assert.True(result);
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public void DotNetTestsZeroTestsExecutedReturnsFalse()
+    {
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test", "Tests.csproj"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var stdout = "No test matches the given testcase filter `FullyQualifiedName=Foo` in Tests.dll";
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, stdout, string.Empty, out var reason);
+
+        Assert.False(result);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", reason);
+    }
+
+    [Fact]
+    public void DotNetTestsNonTestProjectOutputReturnsFalse()
+    {
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test", "App.csproj"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var stdout = "Determining projects to restore...\nAll projects are up-to-date for restore.";
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, stdout, string.Empty, out var reason);
+
+        Assert.False(result);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", reason);
+    }
+
+    [Fact]
+    public void DotNetTestsSummaryTotalZeroReturnsFalse()
+    {
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test", "Tests.csproj"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var stdout = "Passed!  - Failed:     0, Passed:     0, Skipped:     0, Total:     0";
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, stdout, string.Empty, out var reason);
+
+        Assert.False(result);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", reason);
+    }
+
+    [Fact]
+    public void NodeNativeTestTapPassingReturnsTrue()
+    {
+        var step = new VerificationStep("test", "Test", "Node",
+            new VerificationCommand("npm", ["run", "test"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var stdout = "TAP version 13\n# tests 3\n# pass 3\n# fail 0";
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, stdout, string.Empty, out var reason);
+
+        Assert.True(result);
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public void NodeNativeTestZeroTestsReturnsFalse()
+    {
+        var step = new VerificationStep("test", "Test", "Node",
+            new VerificationCommand("npm", ["run", "test"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var stdout = "TAP version 13\n# tests 0\n# pass 0";
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, stdout, string.Empty, out var reason);
+
+        Assert.False(result);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", reason);
+    }
+
+    [Fact]
+    public void NodeVitestOrJestPassingReturnsTrue()
+    {
+        var step = new VerificationStep("test", "Test", "Node",
+            new VerificationCommand("npm", ["run", "test"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var stdout = "Tests  12 passed (12)";
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, stdout, string.Empty, out var reason);
+
+        Assert.True(result);
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public void NodeEmptyOutputReturnsFalse()
+    {
+        var step = new VerificationStep("test", "Test", "Node",
+            new VerificationCommand("npm", ["run", "test"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, string.Empty, string.Empty, out var reason);
+
+        Assert.False(result);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", reason);
     }
 
     private static TemporaryRepository MinimalProject(bool valid)

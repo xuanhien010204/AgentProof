@@ -57,13 +57,8 @@ public static class CompactMcpResponseFactory
         RepositoryVerificationContext context,
         string detailLevel = "compact")
     {
-        var isFull = string.Equals(detailLevel, "full", StringComparison.OrdinalIgnoreCase);
-        if (!isFull && !string.Equals(detailLevel, "compact", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ArgumentException(
-                $"Unsupported detail level '{detailLevel}'. Expected 'compact' or 'full'.",
-                nameof(detailLevel));
-        }
+        var validatedDetailLevel = AgentProofTools.ValidateDetailLevel(detailLevel);
+        var isFull = string.Equals(validatedDetailLevel, "full", StringComparison.Ordinal);
 
         var evidence = context.Result.Evidence;
         var failed = evidence.Where(item => item.Status == VerificationStepStatus.Failed).Select(CreateFailure).ToArray();

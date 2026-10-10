@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="AgentProof.UnitTests" />
+    <InternalsVisibleTo Include="AgentProof.IntegrationTests" />
   </ItemGroup>
 
   <PropertyGroup>

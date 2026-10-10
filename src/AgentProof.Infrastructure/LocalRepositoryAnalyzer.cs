@@ -213,6 +213,12 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
                 if (package.StartsWith("xunit", StringComparison.OrdinalIgnoreCase)) tests.Add("xUnit");
                 if (package.StartsWith("NUnit", StringComparison.OrdinalIgnoreCase)) tests.Add("NUnit");
                 if (package.StartsWith("MSTest", StringComparison.OrdinalIgnoreCase)) tests.Add("MSTest");
+                if (package.Equals("Microsoft.NET.Test.Sdk", StringComparison.OrdinalIgnoreCase)) tests.Add("MSTest");
+            }
+
+            if (tests.Count == 0 && document.Descendants().Any(x => x.Name.LocalName == "IsTestProject" && string.Equals(x.Value.Trim(), "true", StringComparison.OrdinalIgnoreCase)))
+            {
+                tests.Add("MSTest");
             }
 
             foreach (var reference in document.Descendants().Where(x => x.Name.LocalName == "ProjectReference"))
@@ -354,6 +360,8 @@ public sealed class LocalRepositoryAnalyzer : IRepositoryAnalyzer
             if (property.Name.Equals("tailwindcss", StringComparison.OrdinalIgnoreCase)) frameworks.Add("Tailwind CSS");
             if (property.Name.Equals("@playwright/test", StringComparison.OrdinalIgnoreCase) || property.Name.Equals("playwright", StringComparison.OrdinalIgnoreCase)) tests.Add("Playwright");
             if (property.Name.Equals("vitest", StringComparison.OrdinalIgnoreCase)) tests.Add("Vitest");
+            if (property.Name.Equals("jest", StringComparison.OrdinalIgnoreCase) || property.Name.StartsWith("@jest/", StringComparison.OrdinalIgnoreCase)) tests.Add("Jest");
+            if (property.Name.Equals("mocha", StringComparison.OrdinalIgnoreCase)) tests.Add("Mocha");
             if (property.Name.Equals("vite", StringComparison.OrdinalIgnoreCase)) frameworks.Add("Vite");
         }
     }

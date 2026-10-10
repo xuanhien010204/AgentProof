@@ -114,7 +114,9 @@ public sealed class DeterministicEvidenceEvaluator : IEvidenceEvaluator
         if (matchingPlannedSteps.Count == 0)
         {
             var scope = requirement.WorkspaceId is null ? string.Empty : $" in workspace '{requirement.WorkspaceId}'";
-            return new RequirementEvaluation(CriterionStatus.Gap, $"No verification capability is available for evidence type '{requirement.Type}'{scope}.", []);
+            var gapReason = $"No verification capability is available for evidence type '{requirement.Type}'{scope}.";
+            AddGap(allGaps, "MISSING_WORKSPACE_EVIDENCE_PROVIDER", gapReason);
+            return new RequirementEvaluation(CriterionStatus.Gap, gapReason, []);
         }
 
         var executed = executedEvidence

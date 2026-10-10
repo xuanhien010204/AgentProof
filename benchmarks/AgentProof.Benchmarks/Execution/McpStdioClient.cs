@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AgentProof.Benchmarks.Comparison;
 using AgentProof.Benchmarks.Model;
 using AgentProof.Domain;
 using AgentProof.Mcp;
@@ -315,6 +316,7 @@ public sealed class McpStdioClient : IAsyncDisposable
                 JsonRpcPayloadBytes = rawBytes,
                 ToolResultPayloadBytes = toolBytes,
                 ToolResultText = toolText,
+                SemanticSnapshot = SemanticSnapshotExtractor.Extract(toolName, toolText),
                 Success = !isToolError,
                 Error = isToolError ? (string.IsNullOrWhiteSpace(toolText) ? "Tool returned error." : toolText) : null,
                 WorkspaceCount = workspaceCount,

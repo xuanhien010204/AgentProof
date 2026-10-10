@@ -76,6 +76,8 @@ public sealed class BenchmarkRunner
                 PayloadBytesHistory = payloadBytesHistory,
                 Success = representative.Success,
                 Error = representative.Error,
+                ToolResultText = representative.ToolResultText,
+                SemanticSnapshot = representative.SemanticSnapshot,
                 WorkspaceCount = representative.WorkspaceCount,
                 TechnologyCount = representative.TechnologyCount,
                 FrameworkCount = representative.FrameworkCount,

@@ -80,8 +80,12 @@ AgentProof intentionally **does not** expose arbitrary command execution, code e
 
 ### Detail Levels and Progressive Disclosure
 
-- **`compact` (default)**: Returns a context-efficient summary (`schemaVersion: 1`). Failed and timed-out steps include explicit failure reasons and command error output summaries directly in `failedSteps`. Successful step stdout and durations are omitted to minimize context token usage.
-- **`full`**: Returns the identical verification results, summary accounting, and status, and additionally includes an `evidence` array containing complete per-step execution evidence (`status`, `exitCode`, `durationMs`, and full `outputSummary`).
+The `verify` tool accepts an optional `detailLevel` parameter (`"compact"` | `"full"`, case-insensitive, default `"compact"`). Detail level validation is evaluated strictly before any command execution occurs.
+
+- **`compact` (Default, Canonical Production Mode)**: Returns a context-efficient summary (`schemaVersion: 1`). Failed and timed-out steps include explicit failure reasons and command error output summaries directly in `failedSteps` and `timedOutSteps`. Successful step stdout and timings are omitted, minimizing LLM context usage.
+- **`full` (Diagnostic Mode)**: Returns the identical `schemaVersion: 1` structure, status, and summary accounting, and additionally populates the `evidence` field with `DetailedVerificationEvidence[]` containing per-step execution evidence (`stepId`, `workspaceId`, `command`, `status`, `exitCode`, `durationMs`, `workingDirectory`, `outputSummary`).
+  - *Note on Model Shape*: `detailLevel: "full"` is not a reproduction of the raw internal Domain model; it embeds structured diagnostic evidence into the MCP contract.
+  - *Note on Performance*: Each `verify` invocation executes the build and test commands. Requesting `verify(detailLevel: "full")` after a prior `compact` call executes verification steps a second time. Agents should treat `full` as an intentional diagnostic mode when deep logs are required.
 
 ```text
 verify(..., detailLevel: "compact") [Default]

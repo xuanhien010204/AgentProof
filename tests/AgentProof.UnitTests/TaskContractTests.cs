@@ -306,7 +306,20 @@ public sealed class TaskContractTests
                 <TargetFramework>net10.0</TargetFramework>
                 <OutputType>Library</OutputType>
               </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+                <PackageReference Include="xunit" Version="2.9.3" />
+                <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+              </ItemGroup>
             </Project>
+            """);
+        repo.Write("Tests.cs", """
+            using Xunit;
+            public class Tests
+            {
+                [Fact]
+                public void PassingTest() => Assert.True(true);
+            }
             """);
         return repo;
     }

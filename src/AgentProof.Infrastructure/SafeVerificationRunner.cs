@@ -91,12 +91,30 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
                         timedOutOutput, $"Command exceeded timeout of {step.Timeout}.");
                 }
 
-                var output = Summarize(await stdout, await stderr);
+                try
+                {
+                    await Task.WhenAll(stdout, stderr).WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
+                }
+                catch (TimeoutException) { }
+
+                var stdoutText = stdout.IsCompleted ? await stdout : string.Empty;
+                var stderrText = stderr.IsCompleted ? await stderr : string.Empty;
+                var output = Summarize(stdoutText, stderrText);
                 var passed = process.ExitCode == 0;
+                string? failureReason = passed ? null : $"Process exited with code {process.ExitCode}.";
+
+                if (passed && step.ProvidedEvidence.Contains(EvidenceType.Tests))
+                {
+                    if (!HasTestExecutionAssurance(step, stdoutText, stderrText, out var testFailureReason))
+                    {
+                        passed = false;
+                        failureReason = testFailureReason;
+                    }
+                }
+
                 return new VerificationEvidence(step,
                     passed ? VerificationStepStatus.Passed : VerificationStepStatus.Failed,
-                    process.ExitCode, stopwatch.Elapsed, output,
-                    passed ? null : $"Process exited with code {process.ExitCode}.");
+                    process.ExitCode, stopwatch.Elapsed, output, failureReason);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -125,6 +143,10 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+
+        startInfo.EnvironmentVariables["DOTNET_CLI_UI_LANGUAGE"] = "en-US";
+        startInfo.EnvironmentVariables["MSBUILDDISABLENODEREUSE"] = "1";
+        startInfo.EnvironmentVariables["DOTNET_CLI_DO_NOT_USE_GLOBAL_MUTEX"] = "1";
 
         if (OperatingSystem.IsWindows() && NodeExecutables.Contains(command.Executable))
         {
@@ -231,7 +253,8 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
     internal static string Summarize(string stdout, string stderr)
     {
         var combined = string.IsNullOrWhiteSpace(stderr) ? stdout : $"{stdout}\n{stderr}";
-        return SecretPattern().Replace(combined.Trim(), "$1=[REDACTED]");
+        var clean = AnsiPattern().Replace(combined, "");
+        return SecretPattern().Replace(clean.Trim(), "$1=[REDACTED]");
     }
 
     private static void TryKill(Process process)
@@ -242,4 +265,66 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
 
     [GeneratedRegex("(?i)(password|api[_-]?key|token|secret)\\s*[:=]\\s*\\S+")]
     private static partial Regex SecretPattern();
+
+    [GeneratedRegex(@"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")]
+    private static partial Regex AnsiPattern();
+
+    internal static bool HasTestExecutionAssurance(
+        VerificationStep step, string stdout, string stderr, out string? failureReason)
+    {
+        var raw = $"{stdout}\n{stderr}";
+        var combined = AnsiPattern().Replace(raw, "");
+        var executable = Path.GetFileNameWithoutExtension(step.Command.Executable).ToLowerInvariant();
+
+        if (executable == "dotnet" && step.Command.Arguments.Contains("test"))
+        {
+            if (DotNetZeroTestsPattern().IsMatch(combined))
+            {
+                failureReason = "No tests were executed (zero tests discovered or executed).";
+                return false;
+            }
+
+            if (DotNetTestsPassedPattern().IsMatch(combined))
+            {
+                failureReason = null;
+                return true;
+            }
+
+            failureReason = "No tests were executed (zero tests discovered or executed).";
+            return false;
+        }
+
+        if (NodeExecutables.Contains(executable))
+        {
+            if (NodeZeroTestsPattern().IsMatch(combined))
+            {
+                failureReason = "No tests were executed (zero tests discovered or executed).";
+                return false;
+            }
+
+            if (NodeTestsPassedPattern().IsMatch(combined))
+            {
+                failureReason = null;
+                return true;
+            }
+
+            failureReason = "No tests were executed (zero tests discovered or executed).";
+            return false;
+        }
+
+        failureReason = "No tests were executed (zero tests discovered or executed).";
+        return false;
+    }
+
+    [GeneratedRegex(@"(?i)(Passed!\s*-\s*Failed:\s*0,\s*Passed:\s*[1-9]\d*|Total tests:\s*[1-9]\d*.*Passed:\s*[1-9]\d*|Passed:\s*[1-9]\d*.*Failed:\s*0|Test run summary:\s*Passed)")]
+    private static partial Regex DotNetTestsPassedPattern();
+
+    [GeneratedRegex(@"(?i)(No test matches the given|A total of 0 test files matched|No tests found to run|Total tests:\s*0\b|Passed!\s*-\s*Failed:\s*0,\s*Passed:\s*0\b|Total:\s*0\b)")]
+    private static partial Regex DotNetZeroTestsPattern();
+
+    [GeneratedRegex(@"(?i)(#\s*tests\s*[1-9]\d*[\s\S]*#\s*pass\s*[1-9]\d*|\b[1-9]\d*\s*passed\b|\b[1-9]\d*\s*passing\b|Tests:\s*.*?\b[1-9]\d*\s*passed\b|^ok\s+\d+\s+-)", RegexOptions.Multiline)]
+    private static partial Regex NodeTestsPassedPattern();
+
+    [GeneratedRegex(@"(?i)(#\s*tests\s*0\b|#\s*pass\s*0\b|\b0\s*passing\b|\b0\s*passed\b|No tests found)")]
+    private static partial Regex NodeZeroTestsPattern();
 }

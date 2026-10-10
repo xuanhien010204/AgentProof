@@ -37,8 +37,36 @@ public sealed class AgentProofTools(AgentProofService service)
         [Description("Path to the local repository.")] string repositoryPath,
         [Description("Structured task information supplied by the host AI agent.")] TaskContext taskContext,
         [Description("Detail level for verification output: 'compact' (default, context-efficient summary) or 'full' (complete evidence diagnostics and per-step output).")] string detailLevel = "compact",
-        CancellationToken cancellationToken = default) =>
-        CompactMcpResponseFactory.Create(
-            await service.VerifyRepositoryWithContextAsync(repositoryPath, taskContext, cancellationToken),
-            detailLevel);
+        CancellationToken cancellationToken = default)
+    {
+        var validatedDetailLevel = ValidateDetailLevel(detailLevel);
+        var verificationContext = await service.VerifyRepositoryWithContextAsync(repositoryPath, taskContext, cancellationToken);
+        return CompactMcpResponseFactory.Create(verificationContext, validatedDetailLevel);
+    }
+
+    public static string ValidateDetailLevel(string? detailLevel)
+    {
+        if (detailLevel is null)
+        {
+            throw new ArgumentNullException(nameof(detailLevel), "Detail level cannot be null. Supported values: 'compact', 'full'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(detailLevel))
+        {
+            throw new ArgumentException("Detail level cannot be empty or whitespace. Expected 'compact' or 'full'.", nameof(detailLevel));
+        }
+
+        var trimmed = detailLevel.Trim();
+        if (string.Equals(trimmed, "compact", StringComparison.OrdinalIgnoreCase))
+        {
+            return "compact";
+        }
+
+        if (string.Equals(trimmed, "full", StringComparison.OrdinalIgnoreCase))
+        {
+            return "full";
+        }
+
+        throw new ArgumentException($"Unsupported detail level '{detailLevel}'. Expected 'compact' or 'full'.", nameof(detailLevel));
+    }
 }

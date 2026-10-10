@@ -38,7 +38,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  windows-node-launch:
+  windows-build-and-test:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -57,5 +57,8 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore AgentProof.sln
 
-      - name: Run Windows Node launcher regression
-        run: dotnet test tests/AgentProof.UnitTests/AgentProof.UnitTests.csproj -c Release --no-restore --filter FullyQualifiedName~AvailableNpmCanExecuteNodeVerificationCommand
+      - name: Build solution
+        run: dotnet build AgentProof.sln -c Release --no-restore
+
+      - name: Run tests (Unit and Portable MCP Integration)
+        run: dotnet test AgentProof.sln -c Release --no-build

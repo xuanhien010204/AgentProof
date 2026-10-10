@@ -1,0 +1,43 @@
+name: Dogfood Verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      education_repo:
+        description: 'Path or checkout directory for EducationCMS repository'
+        required: true
+        type: string
+      asrp_repo:
+        description: 'Path or checkout directory for ASRP repository'
+        required: true
+        type: string
+
+jobs:
+  dogfood-verification:
+    runs-on: windows-latest
+    env:
+      AGENTPROOF_REQUIRE_DOGFOOD: "true"
+      AGENTPROOF_EDUCATION_REPO: ${{ inputs.education_repo }}
+      AGENTPROOF_ASRP_REPO: ${{ inputs.asrp_repo }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Restore dependencies
+        run: dotnet restore AgentProof.sln
+
+      - name: Build solution
+        run: dotnet build AgentProof.sln -c Release --no-restore
+
+      - name: Run Dedicated Dogfood MCP Tests
+        run: dotnet test tests/AgentProof.IntegrationTests/AgentProof.IntegrationTests.csproj -c Release --no-build --filter Category=Dogfood

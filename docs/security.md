@@ -1,33 +1,84 @@
-# Security
+# Security Policy & Trust Model
 
-AgentProof `0.3.0-preview.1` runs locally. It does not upload repository source, call an LLM API, require API keys, or provide telemetry.
+AgentProof is designed with local-first, defense-in-depth principles. It executes entirely on the local machine or host container. It does not upload source code, make outbound LLM API requests, require cloud API keys, or transmit telemetry.
 
-## Analysis
+---
 
-- MCP analysis and planning tools are read-only.
-- Repository paths are normalized and must exist.
-- Generated directories such as `.git`, `bin`, `obj`, `node_modules`, `.next`, `dist`, `build`, `coverage`, and `TestResults` are pruned.
-- Only small known text configuration files are parsed; binary source content is not inspected.
+## 1. Trust Model & Execution Context
 
-## Verification execution
+### Repository Trust Boundary
+AgentProof enforces rigorous controls over **what commands are formed**, but it **does not isolate or sandbox the operating system process** executing those commands.
 
-- There is no arbitrary shell MCP tool.
-- `verify` regenerates its plan internally rather than accepting a caller-provided command.
-- Commands are represented as an executable plus argument list.
-- `UseShellExecute` is disabled; AgentProof does not invoke `cmd.exe /c`, PowerShell, or `bash -c`.
-- The runner accepts only generated `dotnet restore/build/test`, known package scripts, and an installed Playwright test command.
-- Solution and project targets and working directories must remain inside the repository root.
-- Each process has a timeout and supports cancellation.
-- The process tree is terminated on timeout or caller cancellation before propagating cancellation.
-- stdout and stderr are captured with a 64 KiB-per-stream limit.
-- Common secret assignments are redacted from returned output, and environment variables are never enumerated or logged.
+When the `verify` tool executes:
+- It invokes approved developer toolchains (`dotnet`, `npm`, `pnpm`, `yarn`, `npx`).
+- Those toolchains execute code and targets defined by the analyzed repository itself—including MSBuild custom tasks, NuGet package targets, `package.json` lifecycle scripts, and test suite code.
+- Consequently, code authored in the repository runs with the permissions of the user account executing AgentProof.
 
-## Trust boundary
+### Operating Security Context
+> [!IMPORTANT]
+> AgentProof must always be executed within a security context appropriate for the trust level of the target repository.
+> 
+> When analyzing or verifying untrusted or unreviewed third-party repositories, AgentProof should be executed inside an isolated environment (such as a container, sandboxed virtual machine, or disposable CI runner) with restricted network access and isolated credentials.
 
-Build and test tools can execute scripts defined by the repository itself, including MSBuild targets and package lifecycle hooks. AgentProof prevents the MCP caller from selecting an arbitrary command, but it does not sandbox a repository's own build system. Run verification only against repositories you trust. OS-level sandboxing is a future hardening option.
+---
 
-## Result semantics
+## 2. Analysis & Planning Safety (Read-Only)
 
-- `Verified`: all required checks passed and there are no known gaps.
-- `NotVerified`: a required check failed or timed out.
-- `PartiallyVerified`: executed checks passed, but an optional failure or explicit verification gap remains.
+All preliminary MCP tools are strictly read-only:
+- `analyze_repository`
+- `recommend_skills`
+- `create_verification_plan`
+
+Security safeguards during analysis:
+- **No Arbitrary Shell**: No capability exists in AgentProof to invoke user-defined or host-supplied shell commands.
+- **Path Normalization**: Target repository paths are normalized with `Path.GetFullPath` and verified to exist before enumeration. Traversal attempts outside the root directory are rejected.
+- **Directory Pruning**: Heavy, generated, and metadata directories (`.git`, `bin`, `obj`, `node_modules`, `.next`, `dist`, `build`, `coverage`, `TestResults`) are pruned from deep traversal.
+- **Configuration-Only Inspection**: Only small, recognized project files (`*.csproj`, `*.sln`, `*.slnx`, `package.json`) are parsed. Binary files and arbitrary source files are never loaded or executed during analysis.
+
+---
+
+## 3. Verification Execution Defenses
+
+The `verify` tool executes verification steps subject to strict defensive controls:
+
+1. **Internally Synthesized Plans**:
+   - `verify` synthesizes verification steps internally from inspected repository artifacts and the structured `TaskContext`.
+   - Callers cannot pass arbitrary command lines, binary paths, or flags to `verify`.
+
+2. **Strict Command Allowlist**:
+   - Only approved executables are permitted: `dotnet`, `npm`, `pnpm`, `yarn`, `npx`.
+   - For `dotnet`: Only verbs `restore`, `build`, and `test` targeting verified `.sln`, `.slnx`, or `.csproj` files located inside the repository root.
+   - For Node: Only approved script names (`lint`, `typecheck`, `test`, `build`) declared in `package.json`.
+   - For Playwright: Only the fixed invocation `--no-install playwright test`.
+
+3. **No Shell Wrapping (`UseShellExecute = false`)**:
+   - AgentProof launches processes directly using `ProcessStartInfo` with `UseShellExecute = false`.
+   - Commands are never passed to shell interpreters (`cmd.exe /c`, `powershell.exe`, or `sh -c`), preventing command injection and shell metacharacter manipulation.
+   - Arguments are supplied via `ProcessStartInfo.ArgumentList`, guaranteeing OS-level escaping.
+
+4. **Repository Root Containment**:
+   - Every working directory and project target is validated against the canonical repository root via `Path.GetFullPath`.
+   - If a target or working directory escapes the repository root (`../`), execution is immediately aborted with `InvalidOperationException`.
+
+5. **Process Stdin Isolation**:
+   - Immediately upon starting any verification process, `process.StandardInput.Close()` is called.
+   - This ensures verification processes cannot hang waiting for interactive input, confirmations, or credential prompts.
+
+6. **Fail-Fast & Process Tree Termination**:
+   - Every step enforces an explicit timeout (e.g. 60–120 seconds).
+   - If a process times out or caller cancellation is triggered, AgentProof terminates the entire process tree (`process.Kill(entireProcessTree: true)`) before returning, preventing orphaned background worker processes.
+   - If a required step fails, subsequent dependent steps are cancelled immediately with full `NotRun` step accounting.
+
+7. **Stream Limiting & Secret Redaction**:
+   - Standard output and standard error are captured with a hard limit of 64 KiB per stream to protect host context windows.
+   - Pattern matching redacts common credentials, tokens, passwords, and secret keys in output with `[REDACTED]`.
+   - Host environment variables are never dumped or returned over the MCP connection.
+
+---
+
+## 4. Verification Status Semantics
+
+The evaluation engine assigns unambiguous status:
+- **`Verified`**: All required checks in declared scope passed with exit code `0`, and no verification gaps exist.
+- **`NotVerified`**: One or more required checks failed or timed out.
+- **`PartiallyVerified`**: Executed checks passed, but explicit evidence gaps remain (such as missing required evidence providers or repository-wide verification encountering unsupported workspaces). Unsupported out-of-scope workspaces do not invalidate scoped verification.

@@ -28,6 +28,9 @@ public sealed record BenchmarkOperationResult
     public bool Success { get; init; } = true;
     public string? Error { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OperationSemanticSnapshot? SemanticSnapshot { get; init; }
+
     // Operation-specific metrics
     public int? WorkspaceCount { get; init; }
     public int? TechnologyCount { get; init; }
@@ -60,6 +63,12 @@ public sealed record BenchmarkOperationSummary
     public IReadOnlyList<long> PayloadBytesHistory { get; init; } = [];
     public bool Success { get; init; } = true;
     public string? Error { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ToolResultText { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OperationSemanticSnapshot? SemanticSnapshot { get; init; }
 
     // Operation-specific metrics (from representative/last successful run)
     public int? WorkspaceCount { get; init; }
