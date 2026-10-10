@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using AgentProof.Application;
 using AgentProof.Domain;
 
@@ -61,6 +63,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
             ValidateCommand(root, workingDirectory, step.Command);
             var startInfo = CreateStartInfo(step.Command, workingDirectory);
 
+            var startTimeUtc = DateTime.UtcNow;
             using var process = new Process { StartInfo = startInfo };
             if (!process.Start()) throw new InvalidOperationException("The verification process could not be started.");
             try { process.StandardInput.Close(); } catch { }
@@ -105,7 +108,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
 
                 if (passed && step.ProvidedEvidence.Contains(EvidenceType.Tests))
                 {
-                    if (!HasTestExecutionAssurance(step, stdoutText, stderrText, out var testFailureReason))
+                    if (!HasTestExecutionAssurance(step, stdoutText, stderrText, out var testFailureReason, workingDirectory, startTimeUtc))
                     {
                         passed = false;
                         failureReason = testFailureReason;
@@ -270,11 +273,41 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
     private static partial Regex AnsiPattern();
 
     internal static bool HasTestExecutionAssurance(
-        VerificationStep step, string stdout, string stderr, out string? failureReason)
+        VerificationStep step, string stdout, string stderr, out string? failureReason) =>
+        HasTestExecutionAssurance(step, stdout, stderr, out failureReason, workingDirectory: null, executionStartTimeUtc: null);
+
+    internal static bool HasTestExecutionAssurance(
+        VerificationStep step,
+        string stdout,
+        string stderr,
+        out string? failureReason,
+        string? workingDirectory = null,
+        DateTime? executionStartTimeUtc = null)
     {
+        if (!string.IsNullOrWhiteSpace(workingDirectory) && Directory.Exists(workingDirectory))
+        {
+            if (TryEvaluateStructuredReportArtifacts(workingDirectory, executionStartTimeUtc, out var artifactPassed, out var artifactReason))
+            {
+                if (artifactPassed)
+                {
+                    failureReason = null;
+                    return true;
+                }
+
+                failureReason = artifactReason;
+                return false;
+            }
+        }
+
         var raw = $"{stdout}\n{stderr}";
         var combined = AnsiPattern().Replace(raw, "");
         var executable = Path.GetFileNameWithoutExtension(step.Command.Executable).ToLowerInvariant();
+
+        if (combined.Contains("[output truncated]"))
+        {
+            failureReason = "Test output was truncated and no valid test report artifact was found.";
+            return false;
+        }
 
         if (executable == "dotnet" && step.Command.Arguments.Contains("test"))
         {
@@ -284,7 +317,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
                 return false;
             }
 
-            if (DotNetTestsPassedPattern().IsMatch(combined))
+            if (DotNetTestsPassedPattern().IsMatch(combined) || MtpTestsPassedPattern().IsMatch(combined))
             {
                 failureReason = null;
                 return true;
@@ -294,7 +327,7 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
             return false;
         }
 
-        if (NodeExecutables.Contains(executable))
+        if (NodeExecutables.Contains(executable) || executable == "node")
         {
             if (NodeZeroTestsPattern().IsMatch(combined))
             {
@@ -302,7 +335,11 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
                 return false;
             }
 
-            if (NodeTestsPassedPattern().IsMatch(combined))
+            if (NodeTapTestsPassedPattern().IsMatch(combined) ||
+                NodeSpecTestsPassedPattern().IsMatch(combined) ||
+                JestTestsPassedPattern().IsMatch(combined) ||
+                VitestTestsPassedPattern().IsMatch(combined) ||
+                MochaTestsPassedPattern().IsMatch(combined))
             {
                 failureReason = null;
                 return true;
@@ -316,15 +353,190 @@ public sealed partial class SafeVerificationRunner : IVerificationRunner
         return false;
     }
 
-    [GeneratedRegex(@"(?i)(Passed!\s*-\s*Failed:\s*0,\s*Passed:\s*[1-9]\d*|Total tests:\s*[1-9]\d*.*Passed:\s*[1-9]\d*|Passed:\s*[1-9]\d*.*Failed:\s*0|Test run summary:\s*Passed)")]
+    private static bool TryEvaluateStructuredReportArtifacts(
+        string workingDirectory, DateTime? executionStartTimeUtc, out bool isPassed, out string? failureReason)
+    {
+        isPassed = false;
+        failureReason = null;
+
+        try
+        {
+            var trxCandidates = Directory.GetFiles(workingDirectory, "*.trx", SearchOption.AllDirectories);
+            foreach (var file in trxCandidates)
+            {
+                if (executionStartTimeUtc.HasValue)
+                {
+                    var lastWrite = File.GetLastWriteTimeUtc(file);
+                    if (lastWrite < executionStartTimeUtc.Value.AddSeconds(-2))
+                    {
+                        continue;
+                    }
+                }
+
+                try
+                {
+                    var doc = XDocument.Load(file);
+                    var counters = doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "Counters");
+                    if (counters != null)
+                    {
+                        var total = (int?)counters.Attribute("total") ?? 0;
+                        var passed = (int?)counters.Attribute("passed") ?? 0;
+                        var failed = (int?)counters.Attribute("failed") ?? 0;
+
+                        if (total == 0)
+                        {
+                            failureReason = "No tests were executed (zero tests discovered or executed).";
+                            return true;
+                        }
+
+                        if (failed > 0)
+                        {
+                            failureReason = $"Test run contained {failed} failing test(s).";
+                            return true;
+                        }
+
+                        if (passed > 0)
+                        {
+                            isPassed = true;
+                            failureReason = null;
+                            return true;
+                        }
+                    }
+                }
+                catch (Exception)
+                {
+                    failureReason = "Test report artifact is malformed or could not be parsed.";
+                    return true;
+                }
+            }
+
+            var jsonCandidates = Directory.GetFiles(workingDirectory, "*.json", SearchOption.AllDirectories)
+                .Where(f =>
+                {
+                    var name = Path.GetFileName(f);
+                    return name.Contains("test", StringComparison.OrdinalIgnoreCase) ||
+                           name.Contains("report", StringComparison.OrdinalIgnoreCase) ||
+                           name.Contains("result", StringComparison.OrdinalIgnoreCase);
+                });
+
+            foreach (var file in jsonCandidates)
+            {
+                if (file.EndsWith("package.json", StringComparison.OrdinalIgnoreCase) ||
+                    file.EndsWith("tsconfig.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (executionStartTimeUtc.HasValue)
+                {
+                    var lastWrite = File.GetLastWriteTimeUtc(file);
+                    if (lastWrite < executionStartTimeUtc.Value.AddSeconds(-2))
+                    {
+                        continue;
+                    }
+                }
+
+                try
+                {
+                    using var stream = File.OpenRead(file);
+                    using var doc = JsonDocument.Parse(stream);
+                    var root = doc.RootElement;
+
+                    if (root.TryGetProperty("numTotalTests", out var numTotal) &&
+                        root.TryGetProperty("numPassedTests", out var numPassed) &&
+                        root.TryGetProperty("numFailedTests", out var numFailed))
+                    {
+                        var total = numTotal.GetInt32();
+                        var passed = numPassed.GetInt32();
+                        var failed = numFailed.GetInt32();
+
+                        if (total == 0)
+                        {
+                            failureReason = "No tests were executed (zero tests discovered or executed).";
+                            return true;
+                        }
+
+                        if (failed > 0)
+                        {
+                            failureReason = $"Test run contained {failed} failing test(s).";
+                            return true;
+                        }
+
+                        if (passed > 0)
+                        {
+                            isPassed = true;
+                            failureReason = null;
+                            return true;
+                        }
+                    }
+
+                    if (root.TryGetProperty("stats", out var stats) &&
+                        stats.TryGetProperty("tests", out var mTests) &&
+                        stats.TryGetProperty("passes", out var mPasses) &&
+                        stats.TryGetProperty("failures", out var mFailures))
+                    {
+                        var total = mTests.GetInt32();
+                        var passed = mPasses.GetInt32();
+                        var failed = mFailures.GetInt32();
+
+                        if (total == 0)
+                        {
+                            failureReason = "No tests were executed (zero tests discovered or executed).";
+                            return true;
+                        }
+
+                        if (failed > 0)
+                        {
+                            failureReason = $"Test run contained {failed} failing test(s).";
+                            return true;
+                        }
+
+                        if (passed > 0)
+                        {
+                            isPassed = true;
+                            failureReason = null;
+                            return true;
+                        }
+                    }
+                }
+                catch (JsonException)
+                {
+                    failureReason = "Test report artifact is malformed or could not be parsed.";
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+
+        return false;
+    }
+
+    [GeneratedRegex(@"(?i)(Passed!\s*-\s*Failed:\s*0,\s*Passed:\s*[1-9]\d*|Total tests:\s*[1-9]\d*.*Passed:\s*[1-9]\d*.*Failed:\s*0|Passed:\s*[1-9]\d*.*Failed:\s*0)")]
     private static partial Regex DotNetTestsPassedPattern();
 
-    [GeneratedRegex(@"(?i)(No test matches the given|A total of 0 test files matched|No tests found to run|Total tests:\s*0\b|Passed!\s*-\s*Failed:\s*0,\s*Passed:\s*0\b|Total:\s*0\b)")]
+    [GeneratedRegex(@"(?i)Test run summary:\s*Passed!(?:[\s\S]*?\btotal:\s*[1-9]\d*)?(?:[\s\S]*?\b(?:succeeded|passed):\s*[1-9]\d*)?[\s\S]*?\bfailed:\s*0\b")]
+    private static partial Regex MtpTestsPassedPattern();
+
+    [GeneratedRegex(@"(?i)(No test matches the given|A total of 0 test files matched|No tests found to run|Total tests:\s*0\b|Passed!\s*-\s*Failed:\s*0,\s*Passed:\s*0\b|Total:\s*0\b|succeeded:\s*0\b)")]
     private static partial Regex DotNetZeroTestsPattern();
 
-    [GeneratedRegex(@"(?i)(#\s*tests\s*[1-9]\d*[\s\S]*#\s*pass\s*[1-9]\d*|\b[1-9]\d*\s*passed\b|\b[1-9]\d*\s*passing\b|Tests:\s*.*?\b[1-9]\d*\s*passed\b|^ok\s+\d+\s+-)", RegexOptions.Multiline)]
-    private static partial Regex NodeTestsPassedPattern();
+    [GeneratedRegex(@"(?i)(?:TAP version 13|^ok\s+\d+\s+-)?[\s\S]*?#\s*tests\s*[1-9]\d*[\s\S]*?#\s*pass\s*[1-9]\d*[\s\S]*?#\s*fail\s*0\b", RegexOptions.Multiline)]
+    private static partial Regex NodeTapTestsPassedPattern();
 
-    [GeneratedRegex(@"(?i)(#\s*tests\s*0\b|#\s*pass\s*0\b|\b0\s*passing\b|\b0\s*passed\b|No tests found)")]
+    [GeneratedRegex(@"(?i)ℹ\s*tests\s*[1-9]\d*[\s\S]*?ℹ\s*pass\s*[1-9]\d*[\s\S]*?ℹ\s*fail\s*0\b")]
+    private static partial Regex NodeSpecTestsPassedPattern();
+
+    [GeneratedRegex(@"(?i)Test Suites:\s*.*?\b[1-9]\d*\s*passed,\s*[1-9]\d*\s*total[\s\S]*?Tests:\s*.*?\b[1-9]\d*\s*passed,\s*[1-9]\d*\s*total")]
+    private static partial Regex JestTestsPassedPattern();
+
+    [GeneratedRegex(@"(?i)\bTests\s+[1-9]\d*\s*passed\s*\([1-9]\d*\)")]
+    private static partial Regex VitestTestsPassedPattern();
+
+    [GeneratedRegex(@"(?m)^\s*[1-9]\d*\s+passing\s+\(\d+(?:\.\d+)?(?:ms|s|m)\)")]
+    private static partial Regex MochaTestsPassedPattern();
+
+    [GeneratedRegex(@"(?i)(#\s*tests\s*0\b|#\s*pass\s*0\b|\b0\s*passing\b|\b0\s*passed\b|No tests found|Tests:\s*0 total|ℹ\s*tests\s*0\b)")]
     private static partial Regex NodeZeroTestsPattern();
 }

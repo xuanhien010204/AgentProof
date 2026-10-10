@@ -3,41 +3,180 @@ name: Dogfood Verification
 on:
   workflow_dispatch:
     inputs:
-      education_repo:
-        description: 'Path or checkout directory for EducationCMS repository'
-        required: true
+      education_backend_ref:
+        description: 'Git ref/SHA for education-cms-backend'
+        required: false
+        default: '9a20f7a820a0fcf2df6b561b13e4b3eda1e5a027'
         type: string
-      asrp_repo:
-        description: 'Path or checkout directory for ASRP repository'
-        required: true
+      education_frontend_ref:
+        description: 'Git ref/SHA for education-cms-frontend'
+        required: false
+        default: '9cf60146589d7437e2749e979a96b78873967586'
+        type: string
+      asrp_backend_ref:
+        description: 'Git ref/SHA for asrp-backend'
+        required: false
+        default: '53a1fa78306cb9a9c623b23b4695f2ae50b0206b'
+        type: string
+      asrp_frontend_ref:
+        description: 'Git ref/SHA for asrp-frontend'
+        required: false
+        default: 'bfa250c711d2cd4ef70863f45bb8b21e02788d0f'
+        type: string
+      asrp_ai_ref:
+        description: 'Git ref/SHA for asrp-ai-service'
+        required: false
+        default: 'd716f2243faf9cfff66699ff6869960167ad2275'
+        type: string
+      asrp_app_ref:
+        description: 'Git ref/SHA for asrp-app'
+        required: false
+        default: '42bfcd26e40fbf8c274da4631dea1c0646ae831d'
         type: string
 
 jobs:
   dogfood-verification:
     runs-on: windows-latest
-    env:
-      AGENTPROOF_REQUIRE_DOGFOOD: "true"
-      AGENTPROOF_EDUCATION_REPO: ${{ inputs.education_repo }}
-      AGENTPROOF_ASRP_REPO: ${{ inputs.asrp_repo }}
+    timeout-minutes: 25
     steps:
-      - name: Checkout repository
+      - name: Checkout AgentProof
         uses: actions/checkout@v4
+        with:
+          path: AgentProof
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          global-json-file: global.json
+          dotnet-version: '10.0.x'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
+      - name: Provision EducationCMS Repository Structure
+        shell: pwsh
+        run: |
+          $eduRoot = "$env:RUNNER_TEMP\dogfood\EducationCMS"
+          New-Item -ItemType Directory -Path "$eduRoot" -Force | Out-Null
+          
+          Write-Host "Checking out EducationCMS backend..."
+          git clone https://github.com/xuanhien010204/education-cms-backend.git "$eduRoot\backend"
+          git -C "$eduRoot\backend" checkout ${{ inputs.education_backend_ref || '9a20f7a820a0fcf2df6b561b13e4b3eda1e5a027' }}
+          $backendSha = (git -C "$eduRoot\backend" rev-parse HEAD).Trim()
+          
+          Write-Host "Checking out EducationCMS frontend..."
+          git clone https://github.com/xuanhien010204/education-cms-frontend.git "$eduRoot\frontend"
+          git -C "$eduRoot\frontend" checkout ${{ inputs.education_frontend_ref || '9cf60146589d7437e2749e979a96b78873967586' }}
+          $frontendSha = (git -C "$eduRoot\frontend" rev-parse HEAD).Trim()
+
+          $slnxContent = @"
+          <Solution>
+            <Project Path="backend/Education.Core/Education.Core.csproj" />
+            <Project Path="backend/Education.Infrastructure/Education.Infrastructure.csproj" />
+            <Project Path="backend/Education.API/Education.API.csproj" />
+            <Project Path="backend/Education.Tests/Education.Tests.csproj" />
+          </Solution>
+          "@
+          Set-Content -Path "$eduRoot\EducationCMS.slnx" -Value $slnxContent -Encoding UTF8
+
+          $pkgJson = @"
+          {
+            "name": "education-cms-root",
+            "version": "1.0.0",
+            "private": true,
+            "workspaces": [
+              "frontend"
+            ],
+            "scripts": {
+              "dev": "npm --prefix frontend run dev",
+              "build": "npm --prefix frontend run build",
+              "start": "npm --prefix frontend run start",
+              "lint": "npm --prefix frontend run lint",
+              "typecheck": "npm --prefix frontend run typecheck",
+              "test": "npm --prefix frontend run test",
+              "test:e2e": "npm --prefix frontend run test:e2e",
+              "playwright": "npx --prefix frontend playwright test"
+            }
+          }
+          "@
+          Set-Content -Path "$eduRoot\package.json" -Value $pkgJson -Encoding UTF8
+
+          Write-Host "Installing frontend npm dependencies..."
+          Push-Location "$eduRoot\frontend"
+          npm install --no-audit --no-fund
+          Pop-Location
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### EducationCMS Revisions"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- backend: \`$backendSha\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- frontend: \`$frontendSha\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Root: \`$eduRoot\`"
+
+      - name: Provision ASRP Repository Structure
+        shell: pwsh
+        run: |
+          $asrpRoot = "$env:RUNNER_TEMP\dogfood\ASRP"
+          New-Item -ItemType Directory -Path "$asrpRoot" -Force | Out-Null
+
+          Write-Host "Checking out ASRP backend..."
+          git clone https://github.com/asrp-ecosystem/asrp-backend.git "$asrpRoot\ASRP"
+          git -C "$asrpRoot\ASRP" checkout ${{ inputs.asrp_backend_ref || '53a1fa78306cb9a9c623b23b4695f2ae50b0206b' }}
+          $asrpBackendSha = (git -C "$asrpRoot\ASRP" rev-parse HEAD).Trim()
+
+          Write-Host "Checking out ASRP frontend..."
+          git clone https://github.com/asrp-ecosystem/asrp-frontend.git "$asrpRoot\fe_asrp"
+          git -C "$asrpRoot\fe_asrp" checkout ${{ inputs.asrp_frontend_ref || 'bfa250c711d2cd4ef70863f45bb8b21e02788d0f' }}
+          $asrpFrontendSha = (git -C "$asrpRoot\fe_asrp" rev-parse HEAD).Trim()
+
+          Write-Host "Checking out ASRP AI Service..."
+          git clone https://github.com/asrp-ecosystem/asrp-ai-service.git "$asrpRoot\ai-service"
+          git -C "$asrpRoot\ai-service" checkout ${{ inputs.asrp_ai_ref || 'd716f2243faf9cfff66699ff6869960167ad2275' }}
+          $asrpAiSha = (git -C "$asrpRoot\ai-service" rev-parse HEAD).Trim()
+
+          Write-Host "Checking out ASRP App..."
+          git clone https://github.com/asrp-ecosystem/asrp-app.git "$asrpRoot\asrp_app"
+          git -C "$asrpRoot\asrp_app" checkout ${{ inputs.asrp_app_ref || '42bfcd26e40fbf8c274da4631dea1c0646ae831d' }}
+          $asrpAppSha = (git -C "$asrpRoot\asrp_app" rev-parse HEAD).Trim()
+
+          Write-Host "Installing ASRP web npm dependencies..."
+          Push-Location "$asrpRoot\ASRP\web"
+          npm install --no-audit --no-fund
+          Pop-Location
+
+          Write-Host "Installing fe_asrp npm dependencies..."
+          Push-Location "$asrpRoot\fe_asrp"
+          npm install --no-audit --no-fund
+          Pop-Location
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### ASRP Revisions"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- asrp-backend: \`$asrpBackendSha\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- asrp-frontend: \`$asrpFrontendSha\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- asrp-ai-service: \`$asrpAiSha\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- asrp-app: \`$asrpAppSha\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Root: \`$asrpRoot\`"
+
       - name: Restore dependencies
+        working-directory: AgentProof
         run: dotnet restore AgentProof.sln
 
       - name: Build solution
+        working-directory: AgentProof
         run: dotnet build AgentProof.sln -c Release --no-restore
 
       - name: Run Dedicated Dogfood MCP Tests
-        run: dotnet test tests/AgentProof.IntegrationTests/AgentProof.IntegrationTests.csproj -c Release --no-build --filter Category=Dogfood
+        working-directory: AgentProof
+        env:
+          AGENTPROOF_REQUIRE_DOGFOOD: "true"
+          AGENTPROOF_EDUCATION_REPO: ${{ runner.temp }}\dogfood\EducationCMS
+          AGENTPROOF_ASRP_REPO: ${{ runner.temp }}\dogfood\ASRP
+        run: dotnet test tests/AgentProof.IntegrationTests/AgentProof.IntegrationTests.csproj -c Release --no-build --filter Category=Dogfood --logger "trx;LogFileName=dogfood_results.trx"
+
+      - name: Upload Test Diagnostics on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dogfood-test-results
+          path: |
+            AgentProof/tests/AgentProof.IntegrationTests/TestResults/
+            ${{ runner.temp }}/dogfood/
+          if-no-files-found: warn

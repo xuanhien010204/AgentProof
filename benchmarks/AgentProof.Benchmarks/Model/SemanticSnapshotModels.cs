@@ -11,6 +11,9 @@ public sealed record OperationSemanticSnapshot
     public IReadOnlyList<string>? Frameworks { get; init; }
     public IReadOnlyList<string>? TestFrameworks { get; init; }
 
+    // Skills semantics (recommend_skills)
+    public IReadOnlyList<SkillRecommendationSemanticSnapshot>? SkillRecommendations { get; init; }
+
     // Planning semantics (create_verification_plan)
     public IReadOnlyList<string>? WorkspaceIds { get; init; }
     public IReadOnlyDictionary<string, string>? WorkspacePaths { get; init; }
@@ -30,6 +33,12 @@ public sealed record OperationSemanticSnapshot
     public IReadOnlyList<EvidenceSemanticSnapshot>? Evidence { get; init; }
     public CompactVerificationSummary? Summary { get; init; }
 }
+
+public sealed record SkillRecommendationSemanticSnapshot(
+    string SkillId,
+    string Level,
+    string ReasonCode,
+    string Reason);
 
 public sealed record WorkspaceSemanticSnapshot(
     string Id,
@@ -54,7 +63,8 @@ public sealed record StepFailureSemanticSnapshot(
     string Type,
     IReadOnlyList<string> Command,
     int? ExitCode,
-    string? FailureReason);
+    string? FailureReason,
+    string? OutputSummary = null);
 
 public sealed record NotRunGroupSemanticSnapshot(
     string Reason,
@@ -80,4 +90,5 @@ public sealed record EvidenceSemanticSnapshot(
     string WorkspaceId,
     string Status,
     int? ExitCode,
-    string? FailureReason);
+    string? FailureReason,
+    string? OutputSummary = null);

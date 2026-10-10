@@ -245,6 +245,52 @@ public static class BenchmarkComparer
         List<string> opIssues,
         ref ComparisonVerdict opVerdict)
     {
+        // 0. Skill Recommendation Semantics (recommend_skills)
+        if (baseSnap.SkillRecommendations != null || candSnap.SkillRecommendations != null)
+        {
+            var baseSkills = baseSnap.SkillRecommendations ?? [];
+            var candSkills = candSnap.SkillRecommendations ?? [];
+            var baseSkillIds = baseSkills.Select(s => s.SkillId).ToHashSet();
+            var candSkillIds = candSkills.Select(s => s.SkillId).ToHashSet();
+
+            if (!baseSkillIds.SetEquals(candSkillIds))
+            {
+                var missing = baseSkillIds.Except(candSkillIds).OrderBy(x => x).ToList();
+                var unexpected = candSkillIds.Except(baseSkillIds).OrderBy(x => x).ToList();
+                RecordFail(failures, opIssues, ref opVerdict,
+                    $"Recommended skill IDs mismatch in '{op}': Expected [{string.Join(", ", baseSkillIds.OrderBy(x => x))}], Actual [{string.Join(", ", candSkillIds.OrderBy(x => x))}]. Missing: [{string.Join(", ", missing)}], Unexpected: [{string.Join(", ", unexpected)}].");
+            }
+            else
+            {
+                var baseDict = baseSkills.ToDictionary(s => s.SkillId);
+                var candDict = candSkills.ToDictionary(s => s.SkillId);
+
+                foreach (var skillId in baseSkillIds)
+                {
+                    var bs = baseDict[skillId];
+                    var cs = candDict[skillId];
+
+                    if (!string.Equals(bs.Level, cs.Level, StringComparison.OrdinalIgnoreCase))
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Skill '{skillId}' recommendation level mismatch in '{op}': Expected '{bs.Level}', Actual '{cs.Level}'.");
+                    }
+
+                    if (!string.Equals(bs.ReasonCode, cs.ReasonCode, StringComparison.OrdinalIgnoreCase))
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Skill '{skillId}' reason code mismatch in '{op}': Expected '{bs.ReasonCode}', Actual '{cs.ReasonCode}'.");
+                    }
+
+                    if (!string.Equals(bs.Reason, cs.Reason, StringComparison.Ordinal))
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Skill '{skillId}' reason mismatch in '{op}': Expected '{bs.Reason}', Actual '{cs.Reason}'.");
+                    }
+                }
+            }
+        }
+
         // 1. Repository Semantics
         if (baseSnap.Workspaces != null || candSnap.Workspaces != null)
         {
@@ -387,134 +433,304 @@ public static class BenchmarkComparer
                     $"Planned workspace IDs mismatch in '{op}': Expected [{string.Join(", ", baseSnap.WorkspaceIds.OrderBy(x => x))}], Actual [{string.Join(", ", candSnap.WorkspaceIds.OrderBy(x => x))}].");
             }
 
-            if (baseSnap.PlanGaps != null && candSnap.PlanGaps != null)
+            if (baseSnap.PlanGaps != null || candSnap.PlanGaps != null)
             {
-                var baseGaps = baseSnap.PlanGaps.Select(g => g.Code).ToHashSet();
-                var candGaps = candSnap.PlanGaps.Select(g => g.Code).ToHashSet();
-                var newGaps = candGaps.Except(baseGaps).ToList();
-                if (newGaps.Count > 0)
+                var baseGapsList = baseSnap.PlanGaps ?? [];
+                var candGapsList = candSnap.PlanGaps ?? [];
+                var baseGaps = baseGapsList.Select(g => g.Code).ToHashSet();
+                var candGaps = candGapsList.Select(g => g.Code).ToHashSet();
+                if (!baseGaps.SetEquals(candGaps))
                 {
+                    var newGaps = candGaps.Except(baseGaps).OrderBy(x => x).ToList();
+                    var missingGaps = baseGaps.Except(candGaps).OrderBy(x => x).ToList();
+                    if (newGaps.Count > 0)
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Candidate introduced new planning gap(s) in '{op}': [{string.Join(", ", newGaps)}].");
+                    }
+                    if (missingGaps.Count > 0)
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Planning gap(s) disappeared unexpectedly in '{op}': [{string.Join(", ", missingGaps)}].");
+                    }
+                }
+            }
+
+            if (baseSnap.PlanUnsupportedWorkspaces != null || candSnap.PlanUnsupportedWorkspaces != null)
+            {
+                var basePlanList = baseSnap.PlanUnsupportedWorkspaces ?? [];
+                var candPlanList = candSnap.PlanUnsupportedWorkspaces ?? [];
+                var baseUnsup = basePlanList.Select(u => u.WorkspaceId).ToHashSet();
+                var candUnsup = candPlanList.Select(u => u.WorkspaceId).ToHashSet();
+                if (!baseUnsup.SetEquals(candUnsup))
+                {
+                    var missing = baseUnsup.Except(candUnsup).OrderBy(x => x).ToList();
+                    var unexpected = candUnsup.Except(baseUnsup).OrderBy(x => x).ToList();
                     RecordFail(failures, opIssues, ref opVerdict,
-                        $"Candidate introduced new planning gap(s) in '{op}': [{string.Join(", ", newGaps)}].");
+                        $"Plan unsupported workspace IDs mismatch in '{op}': Expected [{string.Join(", ", baseUnsup.OrderBy(x => x))}], Actual [{string.Join(", ", candUnsup.OrderBy(x => x))}]. Missing: [{string.Join(", ", missing)}], Unexpected: [{string.Join(", ", unexpected)}].");
+                }
+                else
+                {
+                    var baseDict = basePlanList.ToDictionary(u => u.WorkspaceId);
+                    var candDict = candPlanList.ToDictionary(u => u.WorkspaceId);
+                    foreach (var wsId in baseUnsup)
+                    {
+                        var bu = baseDict[wsId];
+                        var cu = candDict[wsId];
+                        if (!bu.Technologies.ToHashSet().SetEquals(cu.Technologies.ToHashSet()))
+                        {
+                            RecordFail(failures, opIssues, ref opVerdict,
+                                $"Plan unsupported workspace '{wsId}' technologies mismatch in '{op}': Expected [{string.Join(", ", bu.Technologies.OrderBy(x => x))}], Actual [{string.Join(", ", cu.Technologies.OrderBy(x => x))}].");
+                        }
+                        if (!string.Equals(bu.Reason, cu.Reason, StringComparison.Ordinal))
+                        {
+                            RecordFail(failures, opIssues, ref opVerdict,
+                                $"Plan unsupported workspace '{wsId}' reason mismatch in '{op}': Expected '{bu.Reason}', Actual '{cu.Reason}'.");
+                        }
+                    }
                 }
             }
         }
 
         // 3. Verification & Evaluation Semantics
-        if (baseSnap.VerificationStatus != null || candSnap.VerificationStatus != null ||
-            baseSnap.Summary != null || candSnap.Summary != null)
+        // Accounting consistency on candidate
+        if (candSnap.Summary != null)
         {
-            // Accounting consistency on candidate
-            if (candSnap.Summary != null)
+            var s = candSnap.Summary;
+            if (s.ExecutedStepCount + s.NotRunStepCount != s.PlannedStepCount)
             {
-                var s = candSnap.Summary;
-                if (s.ExecutedStepCount + s.NotRunStepCount != s.PlannedStepCount)
-                {
-                    RecordFail(failures, opIssues, ref opVerdict,
-                        $"Accounting inconsistency in candidate '{op}': ExecutedStepCount ({s.ExecutedStepCount}) + NotRunStepCount ({s.NotRunStepCount}) != PlannedStepCount ({s.PlannedStepCount}).");
-                }
-
-                if (s.PassedStepCount + s.FailedStepCount + s.TimedOutStepCount != s.ExecutedStepCount)
-                {
-                    RecordFail(failures, opIssues, ref opVerdict,
-                        $"Accounting inconsistency in candidate '{op}': Passed ({s.PassedStepCount}) + Failed ({s.FailedStepCount}) + TimedOut ({s.TimedOutStepCount}) != ExecutedStepCount ({s.ExecutedStepCount}).");
-                }
+                RecordFail(failures, opIssues, ref opVerdict,
+                    $"Accounting inconsistency in candidate '{op}': ExecutedStepCount ({s.ExecutedStepCount}) + NotRunStepCount ({s.NotRunStepCount}) != PlannedStepCount ({s.PlannedStepCount}).");
             }
 
-            // Passed steps comparison
-            if (baseSnap.PassedStepIds != null && candSnap.PassedStepIds != null)
+            if (s.PassedStepCount + s.FailedStepCount + s.TimedOutStepCount != s.ExecutedStepCount)
             {
-                var basePassed = baseSnap.PassedStepIds.ToHashSet();
-                var candPassed = candSnap.PassedStepIds.ToHashSet();
-                var missingPassed = basePassed.Except(candPassed).OrderBy(x => x).ToList();
-                if (missingPassed.Count > 0)
-                {
-                    RecordFail(failures, opIssues, ref opVerdict,
-                        $"Passed step(s) missing in candidate '{op}': [{string.Join(", ", missingPassed)}].");
-                }
+                RecordFail(failures, opIssues, ref opVerdict,
+                    $"Accounting inconsistency in candidate '{op}': Passed ({s.PassedStepCount}) + Failed ({s.FailedStepCount}) + TimedOut ({s.TimedOutStepCount}) != ExecutedStepCount ({s.ExecutedStepCount}).");
             }
+        }
 
-            // Failed steps comparison
-            if (baseSnap.FailedSteps != null && candSnap.FailedSteps != null)
+        // Passed steps comparison
+        if (baseSnap.PassedStepIds != null || candSnap.PassedStepIds != null)
+        {
+            var basePassed = (baseSnap.PassedStepIds ?? []).ToHashSet();
+            var candPassed = (candSnap.PassedStepIds ?? []).ToHashSet();
+            var missingPassed = basePassed.Except(candPassed).OrderBy(x => x).ToList();
+            if (missingPassed.Count > 0)
             {
-                var baseFailed = baseSnap.FailedSteps.ToDictionary(f => f.StepId);
-                var candFailed = candSnap.FailedSteps.ToDictionary(f => f.StepId);
+                RecordFail(failures, opIssues, ref opVerdict,
+                    $"Passed step(s) missing in candidate '{op}': [{string.Join(", ", missingPassed)}].");
+            }
+        }
 
-                foreach (var stepId in baseFailed.Keys)
+        // Failed steps comparison
+        if (baseSnap.FailedSteps != null || candSnap.FailedSteps != null)
+        {
+            var baseFailedList = baseSnap.FailedSteps ?? [];
+            var candFailedList = candSnap.FailedSteps ?? [];
+            var baseFailed = baseFailedList.ToDictionary(f => f.StepId);
+            var candFailed = candFailedList.ToDictionary(f => f.StepId);
+            var baseFailedIds = baseFailed.Keys.ToHashSet();
+            var candFailedIds = candFailed.Keys.ToHashSet();
+
+            if (!baseFailedIds.SetEquals(candFailedIds))
+            {
+                var missing = baseFailedIds.Except(candFailedIds).OrderBy(x => x).ToList();
+                var unexpected = candFailedIds.Except(baseFailedIds).OrderBy(x => x).ToList();
+                RecordFail(failures, opIssues, ref opVerdict,
+                    $"Failed step IDs mismatch in '{op}': Expected [{string.Join(", ", baseFailedIds.OrderBy(x => x))}], Actual [{string.Join(", ", candFailedIds.OrderBy(x => x))}]. Missing: [{string.Join(", ", missing)}], Unexpected: [{string.Join(", ", unexpected)}].");
+            }
+            else
+            {
+                foreach (var stepId in baseFailedIds)
                 {
-                    if (candFailed.TryGetValue(stepId, out var cf))
+                    var bf = baseFailed[stepId];
+                    var cf = candFailed[stepId];
+
+                    if (bf.WorkspaceId != cf.WorkspaceId)
                     {
-                        var bf = baseFailed[stepId];
-                        if (bf.ExitCode != cf.ExitCode)
-                        {
-                            RecordFail(failures, opIssues, ref opVerdict,
-                                $"Step '{stepId}' exit code changed in '{op}': Expected {bf.ExitCode?.ToString(CultureInfo.InvariantCulture) ?? "(null)"}, Actual {cf.ExitCode?.ToString(CultureInfo.InvariantCulture) ?? "(null)"}.");
-                        }
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Failed step '{stepId}' workspace mismatch in '{op}': Expected '{bf.WorkspaceId}', Actual '{cf.WorkspaceId}'.");
+                    }
 
-                        if (!string.Equals(bf.FailureReason, cf.FailureReason, StringComparison.Ordinal))
-                        {
-                            RecordFail(failures, opIssues, ref opVerdict,
-                                $"Step '{stepId}' failure reason changed in '{op}': Expected '{bf.FailureReason ?? "(null)"}', Actual '{cf.FailureReason ?? "(null)"}'.");
-                        }
+                    if (bf.Type != cf.Type)
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Failed step '{stepId}' type mismatch in '{op}': Expected '{bf.Type}', Actual '{cf.Type}'.");
+                    }
+
+                    if (!bf.Command.SequenceEqual(cf.Command))
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Failed step '{stepId}' command changed in '{op}': Expected [{string.Join(" ", bf.Command)}], Actual [{string.Join(" ", cf.Command)}].");
+                    }
+
+                    if (bf.ExitCode != cf.ExitCode)
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Step '{stepId}' exit code changed in '{op}': Expected {bf.ExitCode?.ToString(CultureInfo.InvariantCulture) ?? "(null)"}, Actual {cf.ExitCode?.ToString(CultureInfo.InvariantCulture) ?? "(null)"}.");
+                    }
+
+                    if (!string.Equals(bf.FailureReason, cf.FailureReason, StringComparison.Ordinal))
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Step '{stepId}' failure reason changed in '{op}': Expected '{bf.FailureReason ?? "(null)"}', Actual '{cf.FailureReason ?? "(null)"}'.");
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(bf.OutputSummary) && string.IsNullOrWhiteSpace(cf.OutputSummary))
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Step '{stepId}' failure diagnostics disappeared in '{op}'. Expected diagnostic output summary, but candidate had none.");
                     }
                 }
             }
+        }
 
-            // Criteria comparison
-            if (baseSnap.Criteria != null && candSnap.Criteria != null)
+        // Timed out steps comparison
+        if (baseSnap.TimedOutSteps != null || candSnap.TimedOutSteps != null)
+        {
+            var baseTimedList = baseSnap.TimedOutSteps ?? [];
+            var candTimedList = candSnap.TimedOutSteps ?? [];
+            var baseTimed = baseTimedList.ToDictionary(f => f.StepId);
+            var candTimed = candTimedList.ToDictionary(f => f.StepId);
+            var baseTimedIds = baseTimed.Keys.ToHashSet();
+            var candTimedIds = candTimed.Keys.ToHashSet();
+
+            if (!baseTimedIds.SetEquals(candTimedIds))
             {
-                var baseCriteria = baseSnap.Criteria.ToDictionary(c => c.Id);
-                var candCriteria = candSnap.Criteria.ToDictionary(c => c.Id);
+                var missing = baseTimedIds.Except(candTimedIds).OrderBy(x => x).ToList();
+                var unexpected = candTimedIds.Except(baseTimedIds).OrderBy(x => x).ToList();
+                RecordFail(failures, opIssues, ref opVerdict,
+                    $"Timed-out step IDs mismatch in '{op}': Expected [{string.Join(", ", baseTimedIds.OrderBy(x => x))}], Actual [{string.Join(", ", candTimedIds.OrderBy(x => x))}]. Missing: [{string.Join(", ", missing)}], Unexpected: [{string.Join(", ", unexpected)}].");
+            }
+            else
+            {
+                foreach (var stepId in baseTimedIds)
+                {
+                    var bt = baseTimed[stepId];
+                    var ct = candTimed[stepId];
 
-                if (!baseCriteria.Keys.ToHashSet().SetEquals(candCriteria.Keys.ToHashSet()))
-                {
-                    RecordFail(failures, opIssues, ref opVerdict,
-                        $"Evaluated criteria IDs mismatch in '{op}': Expected [{string.Join(", ", baseCriteria.Keys.OrderBy(x => x))}], Actual [{string.Join(", ", candCriteria.Keys.OrderBy(x => x))}].");
-                }
-                else
-                {
-                    foreach (var cId in baseCriteria.Keys)
+                    if (bt.WorkspaceId != ct.WorkspaceId)
                     {
-                        var bc = baseCriteria[cId];
-                        var cc = candCriteria[cId];
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Timed-out step '{stepId}' workspace mismatch in '{op}': Expected '{bt.WorkspaceId}', Actual '{ct.WorkspaceId}'.");
+                    }
 
-                        if (!string.Equals(bc.Status, cc.Status, StringComparison.OrdinalIgnoreCase))
-                        {
-                            RecordFail(failures, opIssues, ref opVerdict,
-                                $"Criterion '{cId}' status changed in '{op}': Expected '{bc.Status}', Actual '{cc.Status}'.");
-                        }
-
-                        if (!bc.EvidenceStepIds.ToHashSet().SetEquals(cc.EvidenceStepIds.ToHashSet()))
-                        {
-                            RecordFail(failures, opIssues, ref opVerdict,
-                                $"Criterion '{cId}' evidence step IDs mismatch in '{op}': Expected [{string.Join(", ", bc.EvidenceStepIds.OrderBy(x => x))}], Actual [{string.Join(", ", cc.EvidenceStepIds.OrderBy(x => x))}].");
-                        }
+                    if (!bt.Command.SequenceEqual(ct.Command))
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Timed-out step '{stepId}' command changed in '{op}': Expected [{string.Join(" ", bt.Command)}], Actual [{string.Join(" ", ct.Command)}].");
                     }
                 }
             }
+        }
 
-            // Verification gaps comparison
-            if (baseSnap.VerificationGaps != null && candSnap.VerificationGaps != null)
+        // Criteria comparison
+        if (baseSnap.Criteria != null || candSnap.Criteria != null)
+        {
+            var baseCriteriaList = baseSnap.Criteria ?? [];
+            var candCriteriaList = candSnap.Criteria ?? [];
+            var baseCriteria = baseCriteriaList.ToDictionary(c => c.Id);
+            var candCriteria = candCriteriaList.ToDictionary(c => c.Id);
+
+            if (!baseCriteria.Keys.ToHashSet().SetEquals(candCriteria.Keys.ToHashSet()))
             {
-                var baseCodes = baseSnap.VerificationGaps.Select(g => g.Code).ToHashSet();
-                var candCodes = candSnap.VerificationGaps.Select(g => g.Code).ToHashSet();
+                RecordFail(failures, opIssues, ref opVerdict,
+                    $"Evaluated criteria IDs mismatch in '{op}': Expected [{string.Join(", ", baseCriteria.Keys.OrderBy(x => x))}], Actual [{string.Join(", ", candCriteria.Keys.OrderBy(x => x))}].");
+            }
+            else
+            {
+                foreach (var cId in baseCriteria.Keys)
+                {
+                    var bc = baseCriteria[cId];
+                    var cc = candCriteria[cId];
+
+                    if (!string.Equals(bc.Status, cc.Status, StringComparison.OrdinalIgnoreCase))
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Criterion '{cId}' status changed in '{op}': Expected '{bc.Status}', Actual '{cc.Status}'.");
+                    }
+
+                    if (!bc.EvidenceStepIds.ToHashSet().SetEquals(cc.EvidenceStepIds.ToHashSet()))
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Criterion '{cId}' evidence step IDs mismatch in '{op}': Expected [{string.Join(", ", bc.EvidenceStepIds.OrderBy(x => x))}], Actual [{string.Join(", ", cc.EvidenceStepIds.OrderBy(x => x))}].");
+                    }
+                }
+            }
+        }
+
+        // Verification gaps comparison
+        if (baseSnap.VerificationGaps != null || candSnap.VerificationGaps != null)
+        {
+            var baseGapsList = baseSnap.VerificationGaps ?? [];
+            var candGapsList = candSnap.VerificationGaps ?? [];
+            var baseCodes = baseGapsList.Select(g => g.Code).ToHashSet();
+            var candCodes = candGapsList.Select(g => g.Code).ToHashSet();
+            if (!baseCodes.SetEquals(candCodes))
+            {
                 var newCodes = candCodes.Except(baseCodes).OrderBy(x => x).ToList();
+                var missingCodes = baseCodes.Except(candCodes).OrderBy(x => x).ToList();
                 if (newCodes.Count > 0)
                 {
                     RecordFail(failures, opIssues, ref opVerdict,
                         $"Candidate introduced new verification gap code(s) in '{op}': [{string.Join(", ", newCodes)}].");
                 }
-            }
-
-            // Unsupported workspaces comparison
-            if (baseSnap.UnsupportedWorkspaces != null && candSnap.UnsupportedWorkspaces != null)
-            {
-                var baseUnsup = baseSnap.UnsupportedWorkspaces.Select(u => u.WorkspaceId).ToHashSet();
-                var candUnsup = candSnap.UnsupportedWorkspaces.Select(u => u.WorkspaceId).ToHashSet();
-                if (!baseUnsup.SetEquals(candUnsup))
+                if (missingCodes.Count > 0)
                 {
-                    warnings.Add($"Unsupported workspaces visibility changed in '{op}': Expected [{string.Join(", ", baseUnsup.OrderBy(x => x))}], Actual [{string.Join(", ", candUnsup.OrderBy(x => x))}].");
+                    RecordFail(failures, opIssues, ref opVerdict,
+                        $"Verification capability gap(s) disappeared unexpectedly in '{op}': [{string.Join(", ", missingCodes)}].");
                 }
+            }
+        }
+
+        // Unsupported workspaces comparison
+        if (baseSnap.UnsupportedWorkspaces != null || candSnap.UnsupportedWorkspaces != null)
+        {
+            var baseUnsupList = baseSnap.UnsupportedWorkspaces ?? [];
+            var candUnsupList = candSnap.UnsupportedWorkspaces ?? [];
+            var baseUnsup = baseUnsupList.Select(u => u.WorkspaceId).ToHashSet();
+            var candUnsup = candUnsupList.Select(u => u.WorkspaceId).ToHashSet();
+            if (!baseUnsup.SetEquals(candUnsup))
+            {
+                var missing = baseUnsup.Except(candUnsup).OrderBy(x => x).ToList();
+                var unexpected = candUnsup.Except(baseUnsup).OrderBy(x => x).ToList();
+                RecordFail(failures, opIssues, ref opVerdict,
+                    $"Unsupported workspace IDs mismatch in '{op}': Expected [{string.Join(", ", baseUnsup.OrderBy(x => x))}], Actual [{string.Join(", ", candUnsup.OrderBy(x => x))}]. Missing: [{string.Join(", ", missing)}], Unexpected: [{string.Join(", ", unexpected)}].");
+            }
+            else
+            {
+                var baseDict = baseUnsupList.ToDictionary(u => u.WorkspaceId);
+                var candDict = candUnsupList.ToDictionary(u => u.WorkspaceId);
+                foreach (var wsId in baseUnsup)
+                {
+                    var bu = baseDict[wsId];
+                    var cu = candDict[wsId];
+                    if (!bu.Technologies.ToHashSet().SetEquals(cu.Technologies.ToHashSet()))
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Unsupported workspace '{wsId}' technologies mismatch in '{op}': Expected [{string.Join(", ", bu.Technologies.OrderBy(x => x))}], Actual [{string.Join(", ", cu.Technologies.OrderBy(x => x))}].");
+                    }
+                    if (!string.Equals(bu.Reason, cu.Reason, StringComparison.Ordinal))
+                    {
+                        RecordFail(failures, opIssues, ref opVerdict,
+                            $"Unsupported workspace '{wsId}' reason mismatch in '{op}': Expected '{bu.Reason}', Actual '{cu.Reason}'.");
+                    }
+                }
+            }
+        }
+
+        // NotRun steps comparison
+        if (baseSnap.NotRunSteps != null || candSnap.NotRunSteps != null)
+        {
+            var baseNotRunList = baseSnap.NotRunSteps ?? [];
+            var candNotRunList = candSnap.NotRunSteps ?? [];
+            var baseNotRunSteps = baseNotRunList.SelectMany(g => g.StepIds).ToHashSet();
+            var candNotRunSteps = candNotRunList.SelectMany(g => g.StepIds).ToHashSet();
+            if (!baseNotRunSteps.SetEquals(candNotRunSteps))
+            {
+                RecordFail(failures, opIssues, ref opVerdict,
+                    $"NotRun step IDs mismatch in '{op}': Expected [{string.Join(", ", baseNotRunSteps.OrderBy(x => x))}], Actual [{string.Join(", ", candNotRunSteps.OrderBy(x => x))}].");
             }
         }
     }

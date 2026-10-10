@@ -26,6 +26,7 @@ public static class SemanticSnapshotExtractor
             return operation.ToLowerInvariant() switch
             {
                 "analyze_repository" => ExtractRepository(toolResultText),
+                "recommend_skills" => ExtractSkillRecommendations(toolResultText),
                 "create_verification_plan" => ExtractPlan(toolResultText),
                 "verify" => ExtractVerification(toolResultText),
                 _ => null
@@ -59,6 +60,22 @@ public static class SemanticSnapshotExtractor
             Technologies = profile.Technologies ?? [],
             Frameworks = profile.Frameworks ?? [],
             TestFrameworks = profile.TestFrameworks ?? []
+        };
+    }
+
+    private static OperationSemanticSnapshot? ExtractSkillRecommendations(string toolResultText)
+    {
+        var recommendations = JsonSerializer.Deserialize<IReadOnlyList<CompactSkillRecommendation>>(toolResultText, JsonOptions);
+        if (recommendations == null) return null;
+
+        return new OperationSemanticSnapshot
+        {
+            SkillRecommendations = recommendations.Select(r => new SkillRecommendationSemanticSnapshot(
+                r.SkillId,
+                r.Level.ToString(),
+                r.ReasonCode,
+                r.Reason
+            )).ToList()
         };
     }
 
@@ -107,7 +124,8 @@ public static class SemanticSnapshotExtractor
                 f.Type,
                 f.Command ?? [],
                 f.ExitCode,
-                f.FailureReason
+                f.FailureReason,
+                f.OutputSummary
             )).ToList() ?? [],
             TimedOutSteps = vResult.TimedOutSteps?.Select(f => new StepFailureSemanticSnapshot(
                 f.StepId,
@@ -115,7 +133,8 @@ public static class SemanticSnapshotExtractor
                 f.Type,
                 f.Command ?? [],
                 f.ExitCode,
-                f.FailureReason
+                f.FailureReason,
+                f.OutputSummary
             )).ToList() ?? [],
             NotRunSteps = vResult.NotRun?.Select(nr => new NotRunGroupSemanticSnapshot(
                 nr.Reason,
@@ -141,7 +160,8 @@ public static class SemanticSnapshotExtractor
                 e.WorkspaceId,
                 e.Status.ToString(),
                 e.ExitCode,
-                e.FailureReason
+                e.FailureReason,
+                e.OutputSummary
             )).ToList()
         };
     }

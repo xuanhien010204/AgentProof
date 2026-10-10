@@ -405,6 +405,212 @@ public sealed class VerificationRunnerTests
         Assert.Equal("No tests were executed (zero tests discovered or executed).", reason);
     }
 
+    [Fact]
+    public void NodeFakeConsoleLog1PassedReturnsFalse()
+    {
+        var step = new VerificationStep("test", "Test", "Node",
+            new VerificationCommand("node", ["-e", "console.log('1 passed')"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var stdout = "1 passed\n";
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, stdout, string.Empty, out var reason);
+
+        Assert.False(result);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", reason);
+    }
+
+    [Fact]
+    public void NodeJestPassingReturnsTrue()
+    {
+        var step = new VerificationStep("test", "Test", "Node",
+            new VerificationCommand("npm", ["test"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var stdout = "Test Suites: 2 passed, 2 total\nTests:       10 passed, 10 total\nSnapshots:   0 total\nTime:        2.345 s";
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, stdout, string.Empty, out var reason);
+
+        Assert.True(result);
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public void NodeSpecPassingReturnsTrue()
+    {
+        var step = new VerificationStep("test", "Test", "Node",
+            new VerificationCommand("node", ["--test"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var stdout = "ℹ tests 5\nℹ suites 1\nℹ pass 5\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 42.12";
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, stdout, string.Empty, out var reason);
+
+        Assert.True(result);
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public void NodeMochaPassingReturnsTrue()
+    {
+        var step = new VerificationStep("test", "Test", "Node",
+            new VerificationCommand("npx", ["mocha"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var stdout = "  ✔ should do something useful\n  ✔ should do another thing\n\n  2 passing (45ms)";
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, stdout, string.Empty, out var reason);
+
+        Assert.True(result);
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public void DotNetMtpPassingReturnsTrue()
+    {
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test", "Tests.csproj"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var stdout = "Test run summary: Passed!\n  total: 5\n  failed: 0\n  succeeded: 5\n  skipped: 0\nduration: 1.2s";
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, stdout, string.Empty, out var reason);
+
+        Assert.True(result);
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public void TruncatedOutputReturnsFalse()
+    {
+        var step = new VerificationStep("test", "Test", "Node",
+            new VerificationCommand("npm", ["test"]), "C:\\repo", TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var stdout = "Test Suites: 2 passed, 2 total\n[output truncated]";
+
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, stdout, string.Empty, out var reason);
+
+        Assert.False(result);
+        Assert.Equal("Test output was truncated and no valid test report artifact was found.", reason);
+    }
+
+    [Fact]
+    public void TrxArtifactValidPassingReturnsTrue()
+    {
+        using var repo = new TemporaryRepository();
+        var trxPath = Path.Combine(repo.Root, "TestResults", "results.trx");
+        Directory.CreateDirectory(Path.GetDirectoryName(trxPath)!);
+        File.WriteAllText(trxPath, """
+            <?xml version="1.0" encoding="utf-8"?>
+            <TestRun id="1" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <ResultSummary outcome="Completed">
+                <Counters total="4" executed="4" passed="4" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+              </ResultSummary>
+            </TestRun>
+            """);
+
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, "Custom runner finished", string.Empty, out var reason, repo.Root, DateTime.UtcNow.AddMinutes(-1));
+
+        Assert.True(result);
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public void TrxArtifactWithFailuresReturnsFalse()
+    {
+        using var repo = new TemporaryRepository();
+        var trxPath = Path.Combine(repo.Root, "TestResults", "results.trx");
+        Directory.CreateDirectory(Path.GetDirectoryName(trxPath)!);
+        File.WriteAllText(trxPath, """
+            <?xml version="1.0" encoding="utf-8"?>
+            <TestRun id="1" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <ResultSummary outcome="Failed">
+                <Counters total="4" executed="4" passed="3" failed="1" />
+              </ResultSummary>
+            </TestRun>
+            """);
+
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, "Custom runner finished", string.Empty, out var reason, repo.Root, DateTime.UtcNow.AddMinutes(-1));
+
+        Assert.False(result);
+        Assert.Equal("Test run contained 1 failing test(s).", reason);
+    }
+
+    [Fact]
+    public void StaleTrxArtifactIsIgnored()
+    {
+        using var repo = new TemporaryRepository();
+        var trxPath = Path.Combine(repo.Root, "TestResults", "results.trx");
+        Directory.CreateDirectory(Path.GetDirectoryName(trxPath)!);
+        File.WriteAllText(trxPath, """
+            <?xml version="1.0" encoding="utf-8"?>
+            <TestRun id="1" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <ResultSummary outcome="Completed">
+                <Counters total="4" executed="4" passed="4" failed="0" />
+              </ResultSummary>
+            </TestRun>
+            """);
+        File.SetLastWriteTimeUtc(trxPath, DateTime.UtcNow.AddHours(-1));
+
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, "Unrecognized stdout", string.Empty, out var reason, repo.Root, DateTime.UtcNow);
+
+        Assert.False(result);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", reason);
+    }
+
+    [Fact]
+    public void MalformedTrxArtifactFailsClosed()
+    {
+        using var repo = new TemporaryRepository();
+        var trxPath = Path.Combine(repo.Root, "TestResults", "results.trx");
+        Directory.CreateDirectory(Path.GetDirectoryName(trxPath)!);
+        File.WriteAllText(trxPath, "<broken xml>>>");
+
+        var step = new VerificationStep("test", "Test", ".NET",
+            new VerificationCommand("dotnet", ["test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, "output", string.Empty, out var reason, repo.Root, DateTime.UtcNow.AddMinutes(-1));
+
+        Assert.False(result);
+        Assert.Equal("Test report artifact is malformed or could not be parsed.", reason);
+    }
+
+    [Fact]
+    public void JsonReportArtifactPassingReturnsTrue()
+    {
+        using var repo = new TemporaryRepository();
+        var jsonPath = repo.Write("test-report.json", """
+            {
+              "numTotalTests": 15,
+              "numPassedTests": 15,
+              "numFailedTests": 0
+            }
+            """);
+
+        var step = new VerificationStep("test", "Test", "Node",
+            new VerificationCommand("npm", ["test"]), repo.Root, TimeSpan.FromMinutes(1), true, [EvidenceType.Tests]);
+        var result = SafeVerificationRunner.HasTestExecutionAssurance(step, "Custom runner finished", string.Empty, out var reason, repo.Root, DateTime.UtcNow.AddMinutes(-1));
+
+        Assert.True(result);
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public async Task RunAsyncWhenNodeScriptPrintsFake1PassedFailsWithTestsEvidence()
+    {
+        using var repo = new TemporaryRepository();
+        repo.Write("package.json", """
+            {
+              "name": "fake-test-suite",
+              "scripts": {
+                "test": "node -e \"console.log('1 passed')\""
+              }
+            }
+            """);
+        var step = new VerificationStep("fake-test", "Fake Test", "Node",
+            new VerificationCommand("npm", ["run", "test"]), repo.Root, TimeSpan.FromSeconds(30), true, [EvidenceType.Tests]);
+
+        var result = await new SafeVerificationRunner().RunAsync(repo.Root, new VerificationPlan([step], []));
+
+        var ev = Assert.Single(result.Evidence);
+        Assert.Equal(VerificationStepStatus.Failed, ev.Status);
+        Assert.Equal("No tests were executed (zero tests discovered or executed).", ev.FailureReason);
+    }
+
     private static TemporaryRepository MinimalProject(bool valid)
     {
         var repo = new TemporaryRepository();

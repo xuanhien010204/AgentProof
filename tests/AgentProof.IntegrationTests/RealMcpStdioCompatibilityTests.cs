@@ -6,6 +6,7 @@ using AgentProof.Mcp;
 
 namespace AgentProof.IntegrationTests;
 
+[Trait("Category", "Dogfood")]
 public sealed class RealMcpStdioCompatibilityTests
 {
     private static readonly JsonSerializerOptions JsonOptions = new()

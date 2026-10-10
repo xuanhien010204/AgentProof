@@ -771,6 +771,456 @@ public sealed class BenchmarkHarnessTests
         Assert.Contains(comparison.Failures, f => f.Contains("unsupported verifier reason mismatch", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void ComparisonDetectsSkillIdChangeWithIdenticalCountAsFail()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "recommend_skills",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        SkillRecommendations =
+                        [
+                            new SkillRecommendationSemanticSnapshot("dotnet-build", "Recommended", "DOTNET_SDK", "Project uses .NET"),
+                            new SkillRecommendationSemanticSnapshot("dotnet-test", "Recommended", "TESTS", "Project has test project")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 800,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "recommend_skills",
+                    PayloadBytesUtf8 = 800,
+                    Success = true,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        SkillRecommendations =
+                        [
+                            new SkillRecommendationSemanticSnapshot("dotnet-build", "Recommended", "DOTNET_SDK", "Project uses .NET"),
+                            new SkillRecommendationSemanticSnapshot("npm-test", "Recommended", "TESTS", "Project has test project")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("Recommended skill IDs mismatch", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonDetectsSkillRecommendationLevelChangeAsFail()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "recommend_skills",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        SkillRecommendations =
+                        [
+                            new SkillRecommendationSemanticSnapshot("dotnet-test", "Recommended", "TESTS", "Project has test project")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 800,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "recommend_skills",
+                    PayloadBytesUtf8 = 800,
+                    Success = true,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        SkillRecommendations =
+                        [
+                            new SkillRecommendationSemanticSnapshot("dotnet-test", "Optional", "TESTS", "Project has test project")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("recommendation level mismatch", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonDetectsFailedStepIdChangeWithIdenticalFailureCountAsFail()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    VerificationStatus = "NotVerified",
+                    FailedStepCount = 1,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationStatus = "NotVerified",
+                        FailedSteps =
+                        [
+                            new StepFailureSemanticSnapshot("step-build-fail", "backend", "build", ["dotnet", "build"], 1, "Build failed", "CS1002 ; expected")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 800,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 800,
+                    Success = true,
+                    VerificationStatus = "NotVerified",
+                    FailedStepCount = 1,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationStatus = "NotVerified",
+                        FailedSteps =
+                        [
+                            new StepFailureSemanticSnapshot("step-test-fail", "backend", "test", ["dotnet", "test"], 1, "Test failed", "Assert.True failure")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("Failed step IDs mismatch", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonDetectsFailureDiagnosticsDisappearingAsFail()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    VerificationStatus = "NotVerified",
+                    FailedStepCount = 1,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationStatus = "NotVerified",
+                        FailedSteps =
+                        [
+                            new StepFailureSemanticSnapshot("step-1", "backend", "build", ["dotnet", "build"], 1, "Build failed", "CS1002 ; expected at line 42")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 800,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 800,
+                    Success = true,
+                    VerificationStatus = "NotVerified",
+                    FailedStepCount = 1,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationStatus = "NotVerified",
+                        FailedSteps =
+                        [
+                            new StepFailureSemanticSnapshot("step-1", "backend", "build", ["dotnet", "build"], 1, "Build failed", "")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("failure diagnostics disappeared", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonDetectsUnsupportedWorkspaceDisappearingAsFail()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        UnsupportedWorkspaces =
+                        [
+                            new UnsupportedWorkspaceSemanticSnapshot("legacy-ws", ["PHP"], "PHP is not supported.")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 800,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 800,
+                    Success = true,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        UnsupportedWorkspaces = []
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("Unsupported workspace IDs mismatch", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonDetectsUnsupportedWorkspaceReasonChangeAsFail()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        UnsupportedWorkspaces =
+                        [
+                            new UnsupportedWorkspaceSemanticSnapshot("legacy-ws", ["PHP"], "PHP is not supported.")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 800,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 800,
+                    Success = true,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        UnsupportedWorkspaces =
+                        [
+                            new UnsupportedWorkspaceSemanticSnapshot("legacy-ws", ["PHP"], "Ruby is not supported.")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("reason mismatch", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonDetectsCapabilityGapDisappearingUnexpectedlyAsFail()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationGaps =
+                        [
+                            new GapSemanticSnapshot("MISSING_EVIDENCE_TESTS", "No tests found")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 800,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "verify",
+                    PayloadBytesUtf8 = 800,
+                    Success = true,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        VerificationGaps = []
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Fail, comparison.Verdict);
+        Assert.Contains(comparison.Failures, f => f.Contains("disappeared unexpectedly", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ComparisonPreservesPassWhenCorrectPayloadAndEquivalentSemanticsRemainUnchanged()
+    {
+        var baseline = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.2",
+            TotalPayloadBytesUtf8 = 1000,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "recommend_skills",
+                    PayloadBytesUtf8 = 1000,
+                    Success = true,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        SkillRecommendations =
+                        [
+                            new SkillRecommendationSemanticSnapshot("dotnet-build", "Recommended", "DOTNET", "Reason A"),
+                            new SkillRecommendationSemanticSnapshot("dotnet-test", "Recommended", "TESTS", "Reason B")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var candidate = new BenchmarkRun
+        {
+            RepositoryName = "TestRepo",
+            AgentProofVersion = "0.3.0-preview.3",
+            TotalPayloadBytesUtf8 = 600,
+            Operations =
+            [
+                new BenchmarkOperationSummary
+                {
+                    Operation = "recommend_skills",
+                    PayloadBytesUtf8 = 600,
+                    Success = true,
+                    SemanticSnapshot = new OperationSemanticSnapshot
+                    {
+                        SkillRecommendations =
+                        [
+                            new SkillRecommendationSemanticSnapshot("dotnet-test", "Recommended", "TESTS", "Reason B"),
+                            new SkillRecommendationSemanticSnapshot("dotnet-build", "Recommended", "DOTNET", "Reason A")
+                        ]
+                    }
+                }
+            ]
+        };
+
+        var comparison = BenchmarkComparer.Compare(baseline, candidate);
+
+        Assert.Equal(ComparisonVerdict.Pass, comparison.Verdict);
+        Assert.Empty(comparison.Failures);
+    }
+
     private static BenchmarkRun CreateSampleRun(
         string verificationStatus,
         long payloadBytes,
